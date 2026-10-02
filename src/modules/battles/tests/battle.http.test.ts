@@ -77,7 +77,7 @@ describe('rotas /api/battles', () => {
     it('fluxo completo: criar, buscar, jogar e listar', async () => {
         const created = await call('POST', '/', {
             token: player,
-            body: { team: ['faisca'], enemyTeam: ['muralha'] },
+            body: { team: ['barbaro'], enemyTeam: ['cavaleiro'] },
         });
 
         assert.equal(created.status, 201);
@@ -94,7 +94,7 @@ describe('rotas /api/battles', () => {
 
         const played = await call('POST', `/${id}/actions`, {
             token: player,
-            body: { unitId: 'A1', skillId: 'faisca.choque', targetId: 'B1' },
+            body: { unitId: 'A1', skillId: 'barbaro.machadada', targetId: 'B1' },
         });
 
         assert.equal(played.status, 200);
@@ -107,8 +107,27 @@ describe('rotas /api/battles', () => {
         assert.deepEqual(list.body.map((b: any) => b.id), [id]);
     });
 
+    it('POST /:id/surrender encerra a batalha como derrota', async () => {
+        const created = await call('POST', '/', { token: player, body: { team: ['barbaro'], enemyTeam: ['cavaleiro'] } });
+        const id: string = created.body.battle.id;
+
+        const denied = await call('POST', `/${id}/surrender`, { token: otherPlayer });
+        const surrendered = await call('POST', `/${id}/surrender`, { token: player });
+        const again = await call('POST', `/${id}/surrender`, { token: player });
+        const fetched = await call('GET', `/${id}`, { token: player });
+
+        assert.equal(denied.status, 404);
+        assert.equal(surrendered.status, 200);
+        assert.equal(surrendered.body.battle.status, 'finished');
+        assert.equal(surrendered.body.battle.winner, 'B');
+        assert.equal(surrendered.body.battle.state.surrenderedBy, 'A');
+        assert.deepEqual(surrendered.body.events.map((e: any) => e.type), ['surrendered', 'battle_ended']);
+        assert.deepEqual([again.status, again.body.code], [409, 'BATTLE_OVER']);
+        assert.equal(fetched.body.status, 'finished');
+    });
+
     it('batalha de outro jogador e id inválido respondem 404', async () => {
-        const created = await call('POST', '/', { token: player, body: { team: ['brasa'] } });
+        const created = await call('POST', '/', { token: player, body: { team: ['piromante'] } });
         const id: string = created.body.battle.id;
 
         assert.equal((await call('GET', `/${id}`, { token: otherPlayer })).status, 404);
@@ -122,7 +141,7 @@ describe('rotas /api/battles', () => {
     it('corpo inválido responde 400 com código e mensagem', async () => {
         const noTeam = await call('POST', '/', { token: player, body: {} });
         const unknown = await call('POST', '/', { token: player, body: { team: ['dragao'] } });
-        const created = await call('POST', '/', { token: player, body: { team: ['faisca'], enemyTeam: ['muralha'] } });
+        const created = await call('POST', '/', { token: player, body: { team: ['barbaro'], enemyTeam: ['cavaleiro'] } });
         const noSkill = await call('POST', `/${created.body.battle.id}/actions`, { token: player, body: { unitId: 'A1' } });
 
         assert.deepEqual([noTeam.status, noTeam.body.code], [400, 'INVALID_TEAM']);
@@ -131,15 +150,15 @@ describe('rotas /api/battles', () => {
     });
 
     it('regra do jogo quebrada responde 400 com a mensagem no idioma pedido', async () => {
-        const created = await call('POST', '/', { token: player, body: { team: ['faisca'], enemyTeam: ['muralha'] } });
+        const created = await call('POST', '/', { token: player, body: { team: ['barbaro'], enemyTeam: ['cavaleiro'] } });
         const path = `/${created.body.battle.id}/actions`;
-        const body = { unitId: 'A1', skillId: 'faisca.choque' };
+        const body = { unitId: 'A1', skillId: 'barbaro.machadada' };
 
         const portuguese = await call('POST', path, { token: player, body });
         const english = await call('POST', path, { token: player, body, lang: 'en' });
         const enemyUnit = await call('POST', path, {
             token: player,
-            body: { unitId: 'B1', skillId: 'muralha.pancada', targetId: 'A1' },
+            body: { unitId: 'B1', skillId: 'cavaleiro.corte', targetId: 'A1' },
         });
 
         assert.equal(portuguese.status, 400);

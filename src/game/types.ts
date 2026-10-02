@@ -52,7 +52,10 @@ export type StatusKind =
 /** Um status ativo em uma unidade. */
 export interface StatusEffect {
     kind: StatusKind;
-    /** Quantos turnos DA PRÓPRIA unidade o status ainda dura. */
+    /**
+     * Quantos turnos o status ainda dura. A conta é feita na vez de quem o
+     * carrega: cada vez que essa unidade termina de agir, gasta um.
+     */
     turns: number;
     /**
      * O significado depende do tipo: dano por turno (burn, poison), pontos
@@ -60,8 +63,11 @@ export interface StatusEffect {
      */
     value: number;
     sourceId: string;
-    /** Turno em que foi aplicado. Um status não gasta duração no turno em que nasce. */
-    appliedOnTurn: number;
+    /**
+     * A "vez" (BattleState.step) em que foi aplicado. Um status que a unidade
+     * recebe durante a própria vez não gasta duração no fim dessa mesma vez.
+     */
+    appliedOnStep: number;
 }
 
 /**
@@ -77,6 +83,12 @@ export type SkillEffect =
     | { type: 'heal'; power: number }
     | { type: 'status'; status: StatusKind; turns: number; power: number; chance?: number; to?: 'target' | 'self' };
 
+/**
+ * Elemento de uma habilidade. Por enquanto não entra em nenhuma conta: serve
+ * para a tela escolher o efeito visual e o som. Sem elemento, vale 'physical'.
+ */
+export type SkillElement = 'physical' | 'fire' | 'ice' | 'lightning' | 'nature' | 'light';
+
 export interface SkillDefinition {
     id: string;
     name: string;
@@ -85,6 +97,9 @@ export interface SkillDefinition {
     energyCost: number;
     target: TargetType;
     effects: SkillEffect[];
+    element?: SkillElement;
+    /** Golpe à distância: a tela mostra um projétil em vez de a unidade avançar. */
+    ranged?: boolean;
 }
 
 export type CharacterRole = 'attacker' | 'tank' | 'support' | 'assassin' | 'mage' | 'fighter';
@@ -108,8 +123,6 @@ export interface BattleUnit {
     team: TeamId;
     stats: Stats;
     hp: number;
-    /** Barra de ação: vai de 0 a GAUGE_MAX. Quem enche primeiro joga. */
-    actionGauge: number;
     /** Status ativos. No máximo um de cada tipo: reaplicar substitui. */
     statuses: StatusEffect[];
     /**
@@ -122,13 +135,42 @@ export interface BattleUnit {
 
 export interface BattleState {
     units: BattleUnit[];
-    /** Energia compartilhada de cada time. */
+    /** Energia que cada time ainda tem para gastar neste turno. É compartilhada pelas unidades do time. */
     energy: Record<TeamId, number>;
+    /**
+     * Com quanta energia cada time começou este turno: 3 no turno 1, mais 1
+     * a cada turno, até o máximo. A tela usa para mostrar o quanto já foi gasto.
+     */
+    turnEnergy: number;
     /** De quem é a vez. Fica null quando a batalha acaba. */
     activeUnitId: string | null;
-    /** Contador de turnos, começando em 1. */
+    /**
+     * Turno atual, começando em 1. Um turno é uma rodada: cada unidade viva
+     * age uma vez. O número só sobe depois que todas agiram.
+     */
     turn: number;
+    /**
+     * A ordem de ação do turno atual, do primeiro ao último: mais veloz
+     * primeiro, empate decidido na sorte. É definida no começo do turno e,
+     * se a velocidade de alguém mudar no meio dele, quem ainda não agiu é
+     * reordenado. Quem está antes de `activeUnitId` nesta lista já agiu.
+     */
+    order: string[];
+    /**
+     * O número que cada unidade tirou na sorte neste turno (de 0 a 1). Entre
+     * duas unidades com a mesma velocidade, age antes a que tirou o menor.
+     * Fica guardado porque um empate pode aparecer no meio do turno.
+     */
+    draws: Record<string, number>;
+    /**
+     * Quantas "vezes" já aconteceram na batalha inteira (a vez de uma
+     * unidade, mesmo perdida, conta uma). Só cresce. Serve de relógio fino:
+     * a duração dos status e a trava contra jogada dupla usam este número.
+     */
+    step: number;
     winner: TeamId | null;
+    /** Preenchido quando a batalha acabou porque um time desistiu. */
+    surrenderedBy?: TeamId;
     /** Estado do gerador de números aleatórios (ver rng.ts). */
     rngState: number;
 }
@@ -146,13 +188,21 @@ export interface BattleAction {
  * O front usa essa lista para animar: "fulano usou X", "ciclano levou 120"...
  */
 export type BattleEvent =
-    | { type: 'turn_started'; turn: number; unitId: string; team: TeamId; energy: number }
+    /**
+     * Um turno novo começou. `order` é a ordem de ação dele, já sorteada, e
+     * `energy` é a energia com que os dois times começam o turno.
+     */
+    | { type: 'turn_started'; turn: number; order: string[]; energy: number }
+    /** A velocidade de alguém mudou no meio do turno e quem ainda não agiu foi reordenado. */
+    | { type: 'order_changed'; order: string[] }
+    /** Chegou a vez de uma unidade. */
+    | { type: 'unit_activated'; unitId: string; team: TeamId }
     | { type: 'skill_used'; unitId: string; skillId: string; targetIds: string[]; team: TeamId; energy: number }
     /** `amount` é o dano total do golpe; `absorbed` é a parte que o escudo segurou. */
     | { type: 'damage'; sourceId: string; targetId: string; amount: number; absorbed: number; critical: boolean; hp: number }
     | { type: 'heal'; sourceId: string; targetId: string; amount: number; hp: number }
     | { type: 'status_applied'; sourceId: string; targetId: string; status: StatusKind; turns: number; value: number }
-    /** Dano de queimadura ou veneno, no começo do turno de quem carrega o status. */
+    /** Dano de queimadura ou veneno, quando chega a vez de quem carrega o status. */
     | { type: 'status_damage'; targetId: string; status: StatusKind; amount: number; hp: number }
     | { type: 'status_expired'; unitId: string; status: StatusKind }
     /**
@@ -161,8 +211,11 @@ export type BattleEvent =
      * copiar essa lista: não tem que repetir as regras de duração.
      */
     | { type: 'statuses_changed'; unitId: string; statuses: StatusEffect[] }
-    | { type: 'turn_skipped'; unitId: string; status: StatusKind }
+    /** A unidade perdeu a vez (atordoada). */
+    | { type: 'unit_skipped'; unitId: string; status: StatusKind }
     | { type: 'unit_defeated'; unitId: string }
+    /** Um time desistiu. Vem sempre seguido de battle_ended. */
+    | { type: 'surrendered'; team: TeamId }
     | { type: 'battle_ended'; winner: TeamId };
 
 export interface BattleResult {

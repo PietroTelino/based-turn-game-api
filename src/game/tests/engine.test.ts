@@ -1,16 +1,18 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { ENERGY_PER_TURN, FURY_DAMAGE_PER_TURN, FURY_START_TURN, INITIAL_ENERGY, MAX_ENERGY } from '../constants';
+import { ENERGY_GROWTH_PER_TURN, FURY_DAMAGE_PER_TURN, FURY_START_TURN, INITIAL_ENERGY, MAX_ENERGY } from '../constants';
 import {
     applyAction,
     calculateDamage,
     createBattle,
     getAvailableActions,
     getFuryMultiplier,
+    getTurnEnergy,
     getUnit,
-    previewTurnOrder,
+    surrender,
+    upgradeState,
 } from '../engine';
-import type { SkillDefinition } from '../types';
+import type { BattleEvent, BattleState, SkillDefinition } from '../types';
 import { assertRuleError, basicAttackTurn, eventsOfType, makeCharacter } from './helpers';
 
 function skill(id: string, overrides: Partial<SkillDefinition>): SkillDefinition {
@@ -26,19 +28,23 @@ function skill(id: string, overrides: Partial<SkillDefinition>): SkillDefinition
 }
 
 describe('criação da batalha', () => {
-    it('a unidade mais rápida joga primeiro e o time dela ganha energia', () => {
+    it('começa no turno 1, com a unidade mais rápida na vez e os dois times com a energia inicial', () => {
         const { state, events } = createBattle({
             teamA: [makeCharacter('a', { speed: 100 })],
             teamB: [makeCharacter('b', { speed: 150 })],
             seed: 1,
         });
 
-        assert.equal(state.activeUnitId, 'B1');
         assert.equal(state.turn, 1);
+        assert.deepEqual(state.order, ['B1', 'A1']);
+        assert.equal(state.activeUnitId, 'B1');
+        assert.equal(state.step, 1);
         assert.equal(state.winner, null);
-        assert.deepEqual(state.energy, { A: INITIAL_ENERGY, B: INITIAL_ENERGY + ENERGY_PER_TURN });
+        assert.deepEqual(state.energy, { A: INITIAL_ENERGY, B: INITIAL_ENERGY });
+        assert.equal(state.turnEnergy, INITIAL_ENERGY);
         assert.deepEqual(events, [
-            { type: 'turn_started', turn: 1, unitId: 'B1', team: 'B', energy: INITIAL_ENERGY + ENERGY_PER_TURN },
+            { type: 'turn_started', turn: 1, order: ['B1', 'A1'], energy: INITIAL_ENERGY },
+            { type: 'unit_activated', unitId: 'B1', team: 'B' },
         ]);
     });
 
@@ -109,103 +115,390 @@ describe('ataque e vitória (1 contra 1)', () => {
     });
 });
 
-describe('ordem dos turnos', () => {
-    it('quem tem o dobro de velocidade joga o dobro de vezes', () => {
-        let { state } = createBattle({
-            teamA: [makeCharacter('a', { speed: 200, maxHp: 1_000_000 })],
-            teamB: [makeCharacter('b', { speed: 100, maxHp: 1_000_000 })],
+describe('desistência', () => {
+    function setup() {
+        return createBattle({
+            teamA: [makeCharacter('a', { speed: 100 })],
+            teamB: [makeCharacter('b', { speed: 200 })],
             seed: 1,
-        });
-        const turns = { A: 0, B: 0 };
+        }).state;
+    }
 
-        for (let i = 0; i < 30; i++) {
-            turns[getUnit(state, state.activeUnitId ?? '').team] += 1;
-            state = basicAttackTurn(state).state;
-        }
+    it('encerra a batalha com vitória do outro time, mesmo fora da vez de quem desiste', () => {
+        const state = setup();
+        const before = structuredClone(state);
 
-        assert.deepEqual(turns, { A: 20, B: 10 });
+        assert.equal(state.activeUnitId, 'B1', 'a vez é do time B');
+
+        const result = surrender(state, 'A');
+
+        assert.equal(result.state.winner, 'B');
+        assert.equal(result.state.surrenderedBy, 'A');
+        assert.equal(result.state.activeUnitId, null);
+        assert.deepEqual(result.events, [
+            { type: 'surrendered', team: 'A' },
+            { type: 'battle_ended', winner: 'B' },
+        ]);
+        assert.deepEqual(result.state.units.map((u) => u.hp), [1000, 1000], 'ninguém é derrotado pela desistência');
+        assert.deepEqual(state, before, 'surrender não pode modificar o estado de entrada');
     });
 
-    it('a previsão da fila bate com a ordem real', () => {
-        let { state } = createBattle({
-            teamA: [
-                makeCharacter('a1', { speed: 130, maxHp: 1_000_000 }),
-                makeCharacter('a2', { speed: 90, maxHp: 1_000_000 }),
-            ],
+    it('não permite desistir nem jogar depois que a batalha acabou', () => {
+        const { state } = surrender(setup(), 'B');
+
+        assert.equal(state.winner, 'A');
+        assertRuleError(() => surrender(state, 'A'), 'BATTLE_OVER');
+        assertRuleError(() => applyAction(state, { unitId: 'B1', skillId: 'b.basic', targetId: 'A1' }), 'BATTLE_OVER');
+    });
+});
+
+describe('turnos', () => {
+    /** Joga `count` vezes com ataque básico e anota, a cada vez, o turno e quem agiu. */
+    function play(start: BattleState, count: number) {
+        let state = start;
+        const log: { turn: number; unitId: string }[] = [];
+        const events: BattleEvent[] = [];
+
+        for (let i = 0; i < count && state.winner === null; i++) {
+            log.push({ turn: state.turn, unitId: state.activeUnitId ?? '' });
+
+            const result = basicAttackTurn(state);
+
+            state = result.state;
+            events.push(...result.events);
+        }
+
+        return { state, log, events };
+    }
+
+    function fourUnits(seed = 1) {
+        return createBattle({
+            teamA: [makeCharacter('a1', { speed: 130, maxHp: 1_000_000 }), makeCharacter('a2', { speed: 90, maxHp: 1_000_000 })],
+            teamB: [makeCharacter('b1', { speed: 110, maxHp: 1_000_000 }), makeCharacter('b2', { speed: 75, maxHp: 1_000_000 })],
+            seed,
+        });
+    }
+
+    it('o turno só sobe depois que todas as unidades agiram, cada uma uma vez', () => {
+        const { state, events } = fourUnits();
+        const played = play(state, 12);
+
+        assert.deepEqual(
+            played.log.map((entry) => entry.turn),
+            [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3],
+        );
+        assert.equal(played.state.turn, 4);
+        assert.equal(played.state.step, 13, 'step conta cada vez: 12 jogadas mais a que está aberta');
+
+        // Um aviso de turno novo por turno, com o número certo.
+        assert.deepEqual(
+            eventsOfType([...events, ...played.events], 'turn_started').map((event) => event.turn),
+            [1, 2, 3, 4],
+        );
+    });
+
+    it('dentro do turno a ordem é da mais veloz para a mais lenta, e a velocidade não dá vezes a mais', () => {
+        const { state } = fourUnits();
+        const { log } = play(state, 12);
+        const fastestFirst = ['A1', 'B1', 'A2', 'B2'];
+
+        assert.deepEqual(state.order, fastestFirst);
+        assert.deepEqual(
+            log.map((entry) => entry.unitId),
+            [...fastestFirst, ...fastestFirst, ...fastestFirst],
+        );
+    });
+
+    it('velocidade igual: a sorte decide quem vai antes, e o sorteio é refeito a cada turno', () => {
+        const { state } = createBattle({
+            teamA: [makeCharacter('a', { speed: 100, maxHp: 1_000_000_000 })],
             teamB: [
-                makeCharacter('b1', { speed: 110, maxHp: 1_000_000 }),
-                makeCharacter('b2', { speed: 75, maxHp: 1_000_000 }),
+                makeCharacter('b', { speed: 100, maxHp: 1_000_000_000 }),
+                makeCharacter('c', { speed: 150, maxHp: 1_000_000_000 }),
             ],
-            seed: 1,
+            seed: 42,
         });
-        const predicted = previewTurnOrder(state, 12);
-        const actual: string[] = [];
+        const TURNS = 400;
+        const { log } = play(state, TURNS * 3);
+        const orders: string[] = [];
 
-        for (let i = 0; i < 12; i++) {
-            actual.push(state.activeUnitId ?? '');
-            state = basicAttackTurn(state).state;
+        for (let turn = 1; turn <= TURNS; turn++) {
+            orders.push(
+                log
+                    .filter((entry) => entry.turn === turn)
+                    .map((entry) => entry.unitId)
+                    .join(','),
+            );
         }
 
-        assert.equal(predicted.length, 12);
-        assert.deepEqual(predicted, actual);
+        const aFirst = orders.filter((order) => order === 'B2,A1,B1').length;
+        const bFirst = orders.filter((order) => order === 'B2,B1,A1').length;
+        const swaps = orders.filter((order, index) => index > 0 && order !== orders[index - 1]).length;
+
+        assert.equal(aFirst + bFirst, TURNS, 'a mais veloz (B2) é sempre a primeira');
+        assert.ok(aFirst > TURNS * 0.4 && aFirst < TURNS * 0.6, `A foi antes em ${aFirst} de ${TURNS} turnos`);
+        assert.ok(swaps > TURNS * 0.4 && swaps < TURNS * 0.6, `a ordem trocou ${swaps} vezes em ${TURNS} turnos`);
     });
 
-    it('unidade derrotada não joga mais', () => {
-        let { state } = createBattle({
+    it('mudança de velocidade no meio do turno já reordena quem ainda não agiu', () => {
+        const slow = skill('a.slow', {
+            effects: [{ type: 'status', status: 'speed_down', turns: 3, power: 0.5 }],
+        });
+        const { state } = createBattle({
+            teamA: [makeCharacter('a', { speed: 150, maxHp: 1_000_000 }, [slow])],
+            teamB: [makeCharacter('b1', { speed: 120, maxHp: 1_000_000 }), makeCharacter('b2', { speed: 100, maxHp: 1_000_000 })],
+            seed: 1,
+        });
+
+        assert.deepEqual(state.order, ['A1', 'B1', 'B2']);
+
+        // B1 cai de 120 para 60 de velocidade: B2 passa na frente já neste turno.
+        const slowed = applyAction(state, { unitId: 'A1', skillId: 'a.slow', targetId: 'B1' });
+
+        assert.equal(slowed.state.turn, 1);
+        assert.deepEqual(slowed.state.order, ['A1', 'B2', 'B1']);
+        assert.equal(slowed.state.activeUnitId, 'B2');
+        assert.deepEqual(eventsOfType(slowed.events, 'order_changed'), [{ type: 'order_changed', order: ['A1', 'B2', 'B1'] }]);
+
+        // Cada uma ainda age uma vez só neste turno, na ordem nova.
+        const { log, state: nextTurn } = play(slowed.state, 2);
+
+        assert.deepEqual(log, [
+            { turn: 1, unitId: 'B2' },
+            { turn: 1, unitId: 'B1' },
+        ]);
+        assert.equal(nextTurn.turn, 2);
+        assert.deepEqual(nextTurn.order, ['A1', 'B2', 'B1']);
+    });
+
+    it('quem já agiu não muda de lugar nem age de novo, por mais rápido que fique', () => {
+        const haste = skill('a2.haste', {
+            target: 'all-allies',
+            effects: [{ type: 'status', status: 'speed_up', turns: 2, power: 2 }],
+        });
+        const { state } = createBattle({
+            teamA: [
+                makeCharacter('a1', { speed: 150, maxHp: 1_000_000 }),
+                makeCharacter('a2', { speed: 110, maxHp: 1_000_000 }, [haste]),
+                makeCharacter('a3', { speed: 50, maxHp: 1_000_000 }),
+            ],
+            teamB: [makeCharacter('b1', { speed: 130, maxHp: 1_000_000 }), makeCharacter('b2', { speed: 90, maxHp: 1_000_000 })],
+            seed: 1,
+        });
+
+        assert.deepEqual(state.order, ['A1', 'B1', 'A2', 'B2', 'A3']);
+
+        // A1 e B1 agem; A2 triplica a velocidade do time dela.
+        const beforeHaste = play(state, 2).state;
+        const hasted = applyAction(beforeHaste, { unitId: 'A2', skillId: 'a2.haste' });
+
+        // A3 (50 -> 150) passa na frente de B2 (90). A1 já agiu: fica onde estava.
+        assert.deepEqual(hasted.state.order, ['A1', 'B1', 'A2', 'A3', 'B2']);
+        assert.equal(hasted.state.activeUnitId, 'A3');
+
+        const { log, state: nextTurn } = play(hasted.state, 2);
+
+        assert.deepEqual(log.map((entry) => entry.unitId), ['A3', 'B2']);
+        assert.equal(nextTurn.turn, 2);
+    });
+
+    it('sem mudança de velocidade a ordem fica igual e nenhum aviso é emitido', () => {
+        const { state } = fourUnits();
+        const { events } = play(state, 12);
+
+        assert.deepEqual(eventsOfType(events, 'order_changed'), []);
+    });
+
+    it('empate que aparece no meio do turno também é decidido na sorte', () => {
+        const slow = skill('a.slow', {
+            effects: [{ type: 'status', status: 'speed_down', turns: 3, power: 0.5 }],
+        });
+        const SEEDS = 300;
+        let slowedFirst = 0;
+
+        for (let seed = 1; seed <= SEEDS; seed++) {
+            const { state } = createBattle({
+                teamA: [makeCharacter('a', { speed: 300 }, [slow])],
+                teamB: [makeCharacter('b1', { speed: 200 }), makeCharacter('b2', { speed: 100 })],
+                seed,
+            });
+
+            // B1 cai de 200 para 100 e empata com B2.
+            const { state: slowed } = applyAction(state, { unitId: 'A1', skillId: 'a.slow', targetId: 'B1' });
+
+            if (slowed.activeUnitId === 'B1') slowedFirst += 1;
+        }
+
+        assert.ok(slowedFirst > SEEDS * 0.4 && slowedFirst < SEEDS * 0.6, `B1 continuou na frente em ${slowedFirst} de ${SEEDS}`);
+    });
+
+    it('unidade derrotada antes da própria vez não age, e o turno segue', () => {
+        const { state } = createBattle({
             teamA: [makeCharacter('a', { speed: 100, atk: 5000, maxHp: 1_000_000 })],
             teamB: [makeCharacter('b1', { speed: 50, maxHp: 1_000_000 }), makeCharacter('b2', { speed: 90, maxHp: 10 })],
             seed: 1,
         });
 
-        assert.equal(state.activeUnitId, 'A1');
-        state = applyAction(state, { unitId: 'A1', skillId: 'a.basic', targetId: 'B2' }).state;
-        assert.equal(getUnit(state, 'B2').hp, 0);
+        assert.deepEqual(state.order, ['A1', 'B2', 'B1']);
 
-        for (let i = 0; i < 10; i++) {
-            assert.notEqual(state.activeUnitId, 'B2');
+        const afterKill = applyAction(state, { unitId: 'A1', skillId: 'a.basic', targetId: 'B2' }).state;
+
+        assert.equal(getUnit(afterKill, 'B2').hp, 0);
+        assert.equal(afterKill.activeUnitId, 'B1', 'a vez pula B2 e vai para B1');
+        assert.equal(afterKill.turn, 1);
+
+        const { state: later, log } = play(afterKill, 9);
+
+        assert.ok(log.every((entry) => entry.unitId !== 'B2'));
+        assert.deepEqual(later.order, ['A1', 'B1'], 'a ordem dos turnos seguintes só tem as vivas');
+    });
+});
+
+describe('batalha gravada no formato antigo', () => {
+    /** Como era um estado antes dos turnos por rodada: barra de ação, sem `order` nem `step`. */
+    function legacyState(): BattleState {
+        const { state } = createBattle({
+            teamA: [makeCharacter('a1', { speed: 100 }), makeCharacter('a2', { speed: 120 })],
+            teamB: [makeCharacter('b1', { speed: 110 }), makeCharacter('b2', { speed: 90 })],
+            seed: 1,
+        });
+        const legacy = JSON.parse(JSON.stringify(state)) as Record<string, unknown> & { units: Record<string, unknown>[] };
+
+        delete legacy.order;
+        delete legacy.step;
+        legacy.turn = 9; // no formato antigo, o turno contava cada vez
+        legacy.activeUnitId = 'B2';
+
+        for (const unit of legacy.units) {
+            unit.actionGauge = 500;
+        }
+
+        legacy.units[0]!.statuses = [{ kind: 'burn', turns: 2, value: 10, sourceId: 'B1', appliedOnTurn: 8 }];
+
+        return legacy as unknown as BattleState;
+    }
+
+    it('é convertida: quem está na vez abre a ordem e o turno vira o contador de vezes', () => {
+        const legacy = legacyState();
+        const before = structuredClone(legacy);
+        const state = upgradeState(legacy);
+
+        assert.deepEqual(state.order, ['B2', 'A2', 'B1', 'A1']);
+        assert.equal(state.step, 9);
+        assert.equal(state.turn, 3, '9 vezes com 4 unidades: terceiro turno');
+        assert.deepEqual(getUnit(state, 'A1').statuses, [{ kind: 'burn', turns: 2, value: 10, sourceId: 'B1', appliedOnStep: 8 }]);
+        assert.ok(state.units.every((unit) => !('actionGauge' in unit)));
+        assert.deepEqual(legacy, before, 'upgradeState não pode modificar o estado recebido');
+    });
+
+    it('continua jogável até o fim depois de convertida', () => {
+        let state = upgradeState(legacyState());
+
+        for (let i = 0; state.winner === null; i++) {
+            assert.ok(i < 500);
             state = basicAttackTurn(state).state;
         }
+
+        assert.ok(state.winner);
+    });
+
+    it('batalha gravada sem o sorteio do turno ganha um, pela posição que cada unidade já tinha', () => {
+        const { state } = createBattle({
+            teamA: [makeCharacter('a', { speed: 100 })],
+            teamB: [makeCharacter('b', { speed: 150 })],
+            seed: 1,
+        });
+        const saved = JSON.parse(JSON.stringify(state)) as Record<string, unknown>;
+
+        delete saved.draws;
+
+        const upgraded = upgradeState(saved as unknown as BattleState);
+
+        assert.deepEqual(upgraded.draws, { B1: 0, A1: 0.5 });
+        assert.deepEqual(upgraded.order, state.order);
+
+        // E segue jogável: a reordenação usa o sorteio reconstruído.
+        assert.ok(basicAttackTurn(upgraded).state.activeUnitId);
+    });
+
+    it('um estado no formato atual passa sem alteração', () => {
+        const { state } = createBattle({ teamA: [makeCharacter('a')], teamB: [makeCharacter('b')], seed: 1 });
+
+        assert.equal(upgradeState(state), state);
     });
 });
 
 describe('energia', () => {
-    const big = skill('a.big', { energyCost: 3, effects: [{ type: 'damage', power: 2 }] });
+    const big = skill('a1.big', { energyCost: 3, effects: [{ type: 'damage', power: 2 }] });
 
     it('a habilidade gasta a energia do time e é recusada quando falta', () => {
         const { state } = createBattle({
-            teamA: [makeCharacter('a', { speed: 200 }, [big])],
+            teamA: [makeCharacter('a1', { speed: 200 }, [big]), makeCharacter('a2', { speed: 150 }, [skill('a2.big', { energyCost: 3 })])],
             teamB: [makeCharacter('b', { maxHp: 1_000_000 })],
             seed: 1,
         });
-        const energyBefore = state.energy.A;
 
-        const result = applyAction(state, { unitId: 'A1', skillId: 'a.big', targetId: 'B1' });
+        assert.equal(state.energy.A, 3);
+
+        const result = applyAction(state, { unitId: 'A1', skillId: 'a1.big', targetId: 'B1' });
         const [used] = eventsOfType(result.events, 'skill_used');
 
-        assert.equal(used?.energy, energyBefore - 3);
+        assert.equal(used?.energy, 0);
+        assert.equal(result.state.energy.A, 0);
 
-        // A joga de novo (é duas vezes mais rápida) e ganhou só +1 de energia.
-        assert.equal(result.state.activeUnitId, 'A1');
-        assert.equal(result.state.energy.A, energyBefore - 3 + ENERGY_PER_TURN);
+        // A energia é do time: a segunda unidade de A, no mesmo turno, já não paga.
+        assert.equal(result.state.activeUnitId, 'A2');
         assertRuleError(
-            () => applyAction(result.state, { unitId: 'A1', skillId: 'a.big', targetId: 'B1' }),
+            () => applyAction(result.state, { unitId: 'A2', skillId: 'a2.big', targetId: 'B1' }),
             'NOT_ENOUGH_ENERGY',
         );
     });
 
-    it('a energia não passa do teto', () => {
+    it('a cada turno a energia é reabastecida com 1 a mais, sem acumular o que sobrou', () => {
         let { state } = createBattle({
-            teamA: [makeCharacter('a', { maxHp: 1_000_000 })],
+            teamA: [makeCharacter('a', { speed: 200, maxHp: 1_000_000 }, [skill('a.two', { energyCost: 2 })])],
             teamB: [makeCharacter('b', { maxHp: 1_000_000 })],
             seed: 1,
         });
 
-        for (let i = 0; i < 40; i++) {
+        // Turno 1: 3 de energia. A gasta 2 e sobra 1; B não gasta nada.
+        state = applyAction(state, { unitId: 'A1', skillId: 'a.two', targetId: 'B1' }).state;
+        assert.deepEqual(state.energy, { A: 1, B: 3 });
+
+        // Turno 2: os dois recomeçam com 4. A sobra de A (1) e a de B (3) não somam.
+        const turnTwo = basicAttackTurn(state);
+        const [started] = eventsOfType(turnTwo.events, 'turn_started');
+
+        assert.equal(turnTwo.state.turn, 2);
+        assert.deepEqual(turnTwo.state.energy, { A: 4, B: 4 });
+        assert.equal(turnTwo.state.turnEnergy, 4);
+        assert.equal(started?.energy, 4);
+    });
+
+    it('a energia do turno cresce até o máximo e para de crescer', () => {
+        assert.deepEqual(
+            [1, 2, 3, 7, 8, 9, 30].map(getTurnEnergy),
+            [3, 4, 5, 9, 10, 10, 10],
+        );
+        assert.equal(getTurnEnergy(1), INITIAL_ENERGY);
+        assert.equal(getTurnEnergy(2), INITIAL_ENERGY + ENERGY_GROWTH_PER_TURN);
+        assert.equal(getTurnEnergy(1000), MAX_ENERGY);
+
+        let { state } = createBattle({
+            teamA: [makeCharacter('a', { maxHp: 1_000_000_000 })],
+            teamB: [makeCharacter('b', { maxHp: 1_000_000_000 })],
+            seed: 1,
+        });
+        const seen: number[] = [];
+
+        // 12 turnos de ataques básicos (que não gastam energia).
+        for (let i = 0; i < 24; i++) {
+            if (seen.length < state.turn) seen.push(state.energy.A);
+            assert.deepEqual(state.energy, { A: state.turnEnergy, B: state.turnEnergy });
             state = basicAttackTurn(state).state;
-            assert.ok(state.energy.A <= MAX_ENERGY && state.energy.B <= MAX_ENERGY);
         }
 
-        assert.deepEqual(state.energy, { A: MAX_ENERGY, B: MAX_ENERGY });
+        assert.deepEqual(seen, [3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 10]);
     });
 
     it('getAvailableActions marca como indisponível o que a energia não paga', () => {

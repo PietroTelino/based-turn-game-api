@@ -29,10 +29,10 @@ export class InMemoryBattleStore implements BattleStore {
             .map(({ state: _state, ...summary }) => summary);
     }
 
-    async saveIfTurn(id: string, expectedTurn: number, snapshot: BattleSnapshot): Promise<BattleRecord | null> {
+    async saveIfStep(id: string, expectedStep: number, snapshot: BattleSnapshot): Promise<BattleRecord | null> {
         const current = this.rows.get(id);
 
-        if (!current || current.turn !== expectedTurn) {
+        if (!current || current.step !== expectedStep || current.status !== 'in_progress') {
             return null;
         }
 

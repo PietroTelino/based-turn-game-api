@@ -14,7 +14,7 @@ import type { CharacterDefinition, TeamId } from './types';
 
 const TEAM_SIZE = 3;
 const SEEDS = [1, 2, 3];
-const TURN_LIMIT = 1000;
+const TURN_LIMIT = 200;
 
 /** Todas as formas de escolher `size` itens de uma lista, sem repetir. */
 function combinations<T>(items: T[], size: number): T[][] {

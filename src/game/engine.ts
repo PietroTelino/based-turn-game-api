@@ -1,8 +1,7 @@
 import {
-    ENERGY_PER_TURN,
+    ENERGY_GROWTH_PER_TURN,
     FURY_DAMAGE_PER_TURN,
     FURY_START_TURN,
-    GAUGE_MAX,
     INITIAL_ENERGY,
     MAX_ENERGY,
     MAX_TEAM_SIZE,
@@ -35,15 +34,29 @@ import type {
  *   createBattle(times)        -> estado inicial + eventos
  *   applyAction(estado, ação)  -> novo estado + eventos
  *
- * Um "turno" é a vez de UMA unidade. A ordem não é fixa: cada unidade tem uma
- * barra de ação que enche na velocidade dela, e joga quem encher primeiro.
+ * Dois nomes para não confundir:
  *
- * O ciclo de um turno:
- *   1. começa o turno: o time ganha energia;
+ *   - TURNO: uma rodada inteira. Cada unidade viva age uma vez, e só então o
+ *     número do turno sobe. A batalha começa no turno 1.
+ *   - VEZ: o momento de UMA unidade dentro do turno.
+ *
+ * No começo de cada turno a ordem é definida: mais veloz primeiro. Se duas
+ * unidades têm a mesma velocidade, a sorte decide quem vai antes, e o sorteio
+ * é refeito a cada turno. A ordem fica guardada em `state.order`.
+ *
+ * Se a velocidade de alguém mudar no meio do turno, a mudança vale na hora:
+ * quem ainda não agiu é reordenado (quem já agiu não age de novo).
+ *
+ * A energia também é por turno: no começo de cada um, os dois times recebem
+ * a energia daquele turno (3 no turno 1, mais 1 a cada turno, até 10). O que
+ * sobrou do turno anterior não acumula.
+ *
+ * O ciclo de uma vez:
+ *   1. chega a vez da unidade;
  *   2. queimadura e veneno causam dano;
  *   3. se a unidade está atordoada, perde a vez (volta ao passo 1 com a próxima);
  *   4. a unidade age (applyAction);
- *   5. termina o turno: os status dela gastam um turno de duração.
+ *   5. termina a vez: os status dela gastam um turno de duração.
  */
 
 export interface BattleSetup {
@@ -66,7 +79,7 @@ const STAT_MODIFIERS: Partial<Record<StatusKind, { stat: 'atk' | 'def' | 'speed'
 };
 
 /** Limite de segurança para o laço de "quem joga a seguir". */
-const MAX_SKIPPED_TURNS = 1000;
+const MAX_SKIPPED_ACTIVATIONS = 1000;
 
 // ---------------------------------------------------------------------------
 // Consultas (não alteram nada)
@@ -154,6 +167,14 @@ export function getFuryMultiplier(turn: number): number {
     return 1 + Math.max(0, turn - FURY_START_TURN) * FURY_DAMAGE_PER_TURN;
 }
 
+/**
+ * A energia com que cada time começa o turno informado: INITIAL_ENERGY no
+ * turno 1, crescendo a cada turno até MAX_ENERGY.
+ */
+export function getTurnEnergy(turn: number): number {
+    return Math.min(MAX_ENERGY, INITIAL_ENERGY + Math.max(0, turn - 1) * ENERGY_GROWTH_PER_TURN);
+}
+
 export function calculateHeal(caster: Stats, power: number): number {
     return Math.max(1, Math.round(caster.atk * power));
 }
@@ -193,32 +214,6 @@ export function getAvailableActions(state: BattleState): AvailableAction[] {
     });
 }
 
-/**
- * Prevê os próximos a jogar, começando por quem está na vez.
- * É a fila de retratos que aparece na tela. É só uma previsão: se alguém
- * morrer, for atordoado ou mudar de velocidade no caminho, a ordem real muda.
- */
-export function previewTurnOrder(state: BattleState, count: number): string[] {
-    if (state.activeUnitId === null || count <= 0) {
-        return [];
-    }
-
-    const units = structuredClone(state.units.filter(isAlive));
-    const order: string[] = [state.activeUnitId];
-    let current = units.find((u) => u.id === state.activeUnitId);
-
-    while (order.length < count) {
-        if (current) {
-            current.actionGauge = 0;
-        }
-
-        current = advanceGauges(units);
-        order.push(current.id);
-    }
-
-    return order;
-}
-
 // ---------------------------------------------------------------------------
 // Criar a batalha
 // ---------------------------------------------------------------------------
@@ -231,15 +226,20 @@ export function createBattle(setup: BattleSetup): BattleResult {
 
     const state: BattleState = {
         units: [...buildTeam('A', setup.teamA), ...buildTeam('B', setup.teamB)],
-        energy: { A: INITIAL_ENERGY, B: INITIAL_ENERGY },
+        energy: { A: 0, B: 0 },
+        turnEnergy: 0,
         activeUnitId: null,
         turn: 0,
+        order: [],
+        draws: {},
+        step: 0,
         winner: null,
         rngState: seed >>> 0,
     };
 
+    // Não há ordem ainda, então isto abre o turno 1 e chama a primeira unidade.
     const events: BattleEvent[] = [];
-    startNextTurn(state, events);
+    activateNext(state, events);
 
     return { state, events };
 }
@@ -263,7 +263,6 @@ function buildTeam(team: TeamId, characters: CharacterDefinition[]): BattleUnit[
             // com o catálogo: mexer em um não afeta o outro.
             stats: structuredClone(character.stats),
             hp: character.stats.maxHp,
-            actionGauge: 0,
             statuses: [],
             skills: structuredClone(character.skills),
         };
@@ -328,17 +327,39 @@ export function applyAction(current: BattleState, action: BattleAction): BattleR
         }
     }
 
-    // 4. Encerrar o turno de quem jogou
-    endTurn(state, actor, events);
+    // 4. Encerrar a vez de quem jogou
+    endActivation(state, actor, events);
 
-    // 5. Acabou? Senão, descobrir quem joga a seguir
+    // 5. Acabou? Senão, a habilidade pode ter mudado a velocidade de alguém:
+    //    reordenar quem ainda não agiu e chamar a próxima unidade (ou abrir
+    //    um turno novo).
     const winner = findWinner(state);
 
     if (winner) {
         finishBattle(state, winner, events);
     } else {
-        startNextTurn(state, events);
+        reorderWaiting(state, events);
+        activateNext(state, events);
     }
+
+    return { state, events };
+}
+
+/**
+ * Um time desiste: a batalha termina na hora, com vitória do outro time.
+ * Pode acontecer a qualquer momento, mesmo fora da vez de quem desiste.
+ * As unidades ficam como estavam: ninguém é derrotado pela desistência.
+ */
+export function surrender(current: BattleState, team: TeamId): BattleResult {
+    if (current.winner !== null) {
+        throw new GameRuleError('BATTLE_OVER', 'A batalha já terminou');
+    }
+
+    const state = structuredClone(current);
+    const events: BattleEvent[] = [{ type: 'surrendered', team }];
+
+    state.surrenderedBy = team;
+    finishBattle(state, team === 'A' ? 'B' : 'A', events);
 
     return { state, events };
 }
@@ -460,7 +481,7 @@ function applyEffect(
                 turns: effect.turns,
                 value: calculateStatusValue(getEffectiveStats(actor), effect),
                 sourceId: actor.id,
-                appliedOnTurn: state.turn,
+                appliedOnStep: state.step,
             };
 
             // Um de cada tipo por unidade: reaplicar substitui o anterior.
@@ -514,12 +535,16 @@ function defeat(unit: BattleUnit, events: BattleEvent[]): void {
     }
 }
 
-/** Sorteia usando o gerador guardado no estado (e avança esse gerador). */
-function rollChance(state: BattleState, chance: number): boolean {
-    const roll = nextRandom(state.rngState);
-    state.rngState = roll.rngState;
+/** Sorteia um número de 0 a 1 usando o gerador guardado no estado (e avança esse gerador). */
+function roll(state: BattleState): number {
+    const next = nextRandom(state.rngState);
+    state.rngState = next.rngState;
 
-    return roll.value < chance;
+    return next.value;
+}
+
+function rollChance(state: BattleState, chance: number): boolean {
+    return roll(state) < chance;
 }
 
 function findWinner(state: BattleState): TeamId | null {
@@ -539,30 +564,98 @@ function finishBattle(state: BattleState, winner: TeamId, events: BattleEvent[])
 }
 
 // ---------------------------------------------------------------------------
-// Começo e fim de turno
+// Turnos e vezes
 // ---------------------------------------------------------------------------
 
 /**
- * Descobre quem joga a seguir e resolve o começo do turno dessa unidade.
- * Se ela morrer pelo dano de status ou estiver atordoada, passa para a
- * próxima. Quando esta função termina, ou há uma unidade pronta para agir
- * ou a batalha acabou.
+ * Abre um turno novo: sobe o número e define a ordem de ação.
+ *
+ * A ordem é por velocidade (já contando bônus e penalidades), da maior para a
+ * menor. Para o empate, cada unidade tira um número na sorte e quem tirar o
+ * menor vai antes. Como o sorteio é refeito a cada turno, duas unidades com a
+ * mesma velocidade têm 50% de chance de trocar de lugar de um turno para o
+ * outro.
  */
-function startNextTurn(state: BattleState, events: BattleEvent[]): void {
-    for (let skipped = 0; skipped < MAX_SKIPPED_TURNS; skipped++) {
-        const unit = advanceGauges(state.units);
+function startTurn(state: BattleState, events: BattleEvent[]): void {
+    const alive = state.units.filter(isAlive);
+
+    state.draws = {};
+
+    for (const unit of alive) {
+        state.draws[unit.id] = roll(state);
+    }
+
+    state.turn += 1;
+    state.order = sortBySpeed(state, alive).map((unit) => unit.id);
+
+    // A energia não acumula: os dois times recomeçam com a energia do turno.
+    state.turnEnergy = getTurnEnergy(state.turn);
+    state.energy = { A: state.turnEnergy, B: state.turnEnergy };
+
+    events.push({ type: 'turn_started', turn: state.turn, order: [...state.order], energy: state.turnEnergy });
+}
+
+/** Mais veloz primeiro; com a mesma velocidade, quem tirou o menor número no sorteio do turno. */
+function sortBySpeed(state: BattleState, units: BattleUnit[]): BattleUnit[] {
+    return units
+        .map((unit) => ({ unit, speed: getEffectiveStats(unit).speed, draw: state.draws[unit.id] ?? 0 }))
+        .sort((a, b) => b.speed - a.speed || a.draw - b.draw)
+        .map((entry) => entry.unit);
+}
+
+/**
+ * Reordena quem ainda não agiu neste turno, pela velocidade de agora. É
+ * chamada depois de cada habilidade: se ela deixou alguém mais rápido ou mais
+ * lento, a mudança já vale neste turno.
+ *
+ * Quem já agiu (e quem está na vez) fica onde está. Unidades derrotadas
+ * continuam na posição em que estavam: elas não agem de qualquer forma. O
+ * desempate usa o mesmo sorteio do começo do turno, então um empate que
+ * apareça agora também é decidido na sorte.
+ */
+function reorderWaiting(state: BattleState, events: BattleEvent[]): void {
+    const position = state.activeUnitId === null ? -1 : state.order.indexOf(state.activeUnitId);
+    const waiting = state.order.slice(position + 1).map((unitId) => getUnit(state, unitId));
+    const sorted = sortBySpeed(state, waiting.filter(isAlive));
+    const reordered = waiting.map((unit) => (isAlive(unit) ? sorted.shift() ?? unit : unit).id);
+    const order = [...state.order.slice(0, position + 1), ...reordered];
+
+    if (order.some((unitId, index) => unitId !== state.order[index])) {
+        state.order = order;
+        events.push({ type: 'order_changed', order: [...order] });
+    }
+}
+
+/**
+ * Chama a próxima unidade da ordem e resolve o começo da vez dela. Se a
+ * ordem acabou, abre um turno novo. Se a unidade morrer pelo dano de status
+ * ou estiver atordoada, passa para a seguinte. Quando esta função termina,
+ * ou há uma unidade pronta para agir ou a batalha acabou.
+ */
+function activateNext(state: BattleState, events: BattleEvent[]): void {
+    let position = state.activeUnitId === null ? -1 : state.order.indexOf(state.activeUnitId);
+
+    for (let skipped = 0; skipped < MAX_SKIPPED_ACTIVATIONS; skipped++) {
+        position += 1;
+
+        // Todo mundo já agiu: o turno acabou e começa o próximo.
+        if (position >= state.order.length) {
+            startTurn(state, events);
+            position = 0;
+        }
+
+        const unitId = state.order[position];
+        const unit = unitId === undefined ? undefined : getUnit(state, unitId);
+
+        // Foi derrotada antes de chegar a vez dela neste turno.
+        if (!unit || !isAlive(unit)) {
+            continue;
+        }
 
         state.activeUnitId = unit.id;
-        state.turn += 1;
-        state.energy[unit.team] = Math.min(MAX_ENERGY, state.energy[unit.team] + ENERGY_PER_TURN);
+        state.step += 1;
 
-        events.push({
-            type: 'turn_started',
-            turn: state.turn,
-            unitId: unit.id,
-            team: unit.team,
-            energy: state.energy[unit.team],
-        });
+        events.push({ type: 'unit_activated', unitId: unit.id, team: unit.team });
 
         applyDamageOverTime(unit, events);
 
@@ -574,20 +667,19 @@ function startNextTurn(state: BattleState, events: BattleEvent[]): void {
                 return;
             }
 
-            unit.actionGauge = 0;
             continue;
         }
 
         if (hasStatus(unit, 'stun')) {
-            events.push({ type: 'turn_skipped', unitId: unit.id, status: 'stun' });
-            endTurn(state, unit, events);
+            events.push({ type: 'unit_skipped', unitId: unit.id, status: 'stun' });
+            endActivation(state, unit, events);
             continue;
         }
 
         return;
     }
 
-    throw new Error('Turnos demais foram pulados em sequência');
+    throw new Error('Vezes demais foram puladas em sequência');
 }
 
 /** Queimadura e veneno: dano direto na vida, sem passar por defesa nem escudo. */
@@ -610,14 +702,12 @@ function applyDamageOverTime(unit: BattleUnit, events: BattleEvent[]): void {
 }
 
 /**
- * Fim do turno de uma unidade: a barra de ação zera e cada status dela gasta
- * um turno de duração. Um status aplicado neste mesmo turno (um bônus que a
- * unidade deu a si mesma, por exemplo) só começa a contar no próximo, para
- * que "dura 2 turnos" signifique duas vezes agindo com ele.
+ * Fim da vez de uma unidade: cada status dela gasta um turno de duração. Um
+ * status aplicado nesta mesma vez (um bônus que a unidade deu a si mesma, por
+ * exemplo) só começa a contar na próxima, para que "dura 2 turnos" signifique
+ * duas vezes agindo com ele.
  */
-function endTurn(state: BattleState, unit: BattleUnit, events: BattleEvent[]): void {
-    unit.actionGauge = 0;
-
+function endActivation(state: BattleState, unit: BattleUnit, events: BattleEvent[]): void {
     if (!isAlive(unit)) {
         return;
     }
@@ -626,7 +716,7 @@ function endTurn(state: BattleState, unit: BattleUnit, events: BattleEvent[]): v
     let changed = false;
 
     for (const status of unit.statuses) {
-        if (status.appliedOnTurn === state.turn) {
+        if (status.appliedOnStep === state.step) {
             remaining.push(status);
             continue;
         }
@@ -646,41 +736,73 @@ function endTurn(state: BattleState, unit: BattleUnit, events: BattleEvent[]): v
     }
 }
 
+// ---------------------------------------------------------------------------
+// Batalhas gravadas no formato antigo
+// ---------------------------------------------------------------------------
+
 /**
- * Avança o "tempo" até a primeira barra de ação encher e devolve essa unidade.
+ * Antes dos turnos por rodada, cada unidade tinha uma barra de ação e o
+ * "turno" contava cada vez. Uma batalha gravada naquele formato não tem
+ * `order` nem `step`. Esta função a converte para o formato atual, para que
+ * continue abrindo (e, se estava em andamento, possa ser terminada):
  *
- * Cada barra enche `speed` pontos por unidade de tempo, então quem tem o dobro
- * de velocidade joga o dobro de vezes. Em vez de simular o tempo passo a
- * passo, calculamos direto quanto falta para cada uma e pulamos até lá.
+ *   - o turno antigo vira `step`;
+ *   - o turno em andamento é montado com quem está na vez primeiro e os
+ *     demais vivos por velocidade;
+ *   - o número do turno é estimado pela quantidade de vezes que já passaram.
  *
- * Empate: joga a mais rápida; se ainda empatar, a que vem antes na lista.
+ * Também completa o que foi criado depois, em batalhas gravadas antes:
+ *
+ *   - o sorteio do turno (`draws`): cada unidade recebe um número conforme a
+ *     posição que já tinha na ordem, o que mantém os empates como estavam;
+ *   - a energia do turno (`turnEnergy`): a batalha segue com a energia que
+ *     tinha, e passa a ser reabastecida a partir do turno seguinte.
+ *
+ * Um estado que já está no formato atual volta como veio.
  */
-function advanceGauges(units: BattleUnit[]): BattleUnit {
-    const alive = units.filter(isAlive).map((unit) => ({ unit, speed: getEffectiveStats(unit).speed }));
-    let next: { unit: BattleUnit; speed: number } | undefined;
-    let shortestTime = Infinity;
+export function upgradeState(saved: BattleState): BattleState {
+    const hasRounds = Array.isArray(saved.order) && typeof saved.step === 'number';
 
-    for (const entry of alive) {
-        const time = Math.max(0, GAUGE_MAX - entry.unit.actionGauge) / entry.speed;
-        const isSooner = time < shortestTime;
-        const isTieButFaster = time === shortestTime && next !== undefined && entry.speed > next.speed;
-
-        if (isSooner || isTieButFaster) {
-            next = entry;
-            shortestTime = time;
-        }
+    if (hasRounds && saved.draws && typeof saved.turnEnergy === 'number') {
+        return saved;
     }
 
-    if (!next) {
-        throw new Error('Não há unidades vivas para jogar');
+    const state = structuredClone(saved);
+
+    if (hasRounds) {
+        state.draws ??= drawsFromOrder(state.order);
+        state.turnEnergy ??= getTurnEnergy(state.turn);
+
+        return state;
     }
 
-    for (const { unit, speed } of alive) {
-        unit.actionGauge = Math.min(GAUGE_MAX, unit.actionGauge + speed * shortestTime);
+    const step = state.turn;
+
+    for (const unit of state.units) {
+        const legacy = unit as BattleUnit & { actionGauge?: number };
+
+        delete legacy.actionGauge;
+        unit.statuses = getStatuses(unit).map((status) => {
+            const { appliedOnTurn, ...rest } = status as StatusEffect & { appliedOnTurn?: number };
+
+            return { ...rest, appliedOnStep: status.appliedOnStep ?? appliedOnTurn ?? 0 };
+        });
     }
 
-    // Evita que um erro de arredondamento deixe a barra em 999.9999.
-    next.unit.actionGauge = GAUGE_MAX;
+    const waiting = state.units
+        .filter((unit) => isAlive(unit) && unit.id !== state.activeUnitId)
+        .sort((a, b) => getEffectiveStats(b).speed - getEffectiveStats(a).speed)
+        .map((unit) => unit.id);
 
-    return next.unit;
+    state.step = step;
+    state.turn = Math.max(1, Math.ceil(step / Math.max(1, state.units.length)));
+    state.order = state.activeUnitId === null ? [] : [state.activeUnitId, ...waiting];
+    state.draws = drawsFromOrder(state.order);
+    state.turnEnergy = getTurnEnergy(state.turn);
+
+    return state;
+}
+
+function drawsFromOrder(order: string[]): Record<string, number> {
+    return Object.fromEntries(order.map((unitId, index) => [unitId, index / Math.max(1, order.length)]));
 }

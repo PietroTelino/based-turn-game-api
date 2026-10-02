@@ -9,6 +9,7 @@ const SUMMARY_FIELDS = {
     status: true,
     winner: true,
     turn: true,
+    step: true,
     createdAt: true,
     updatedAt: true,
     finishedAt: true,
@@ -23,6 +24,7 @@ function toSummary(row: SummaryRow): BattleSummary {
         status: row.status as BattleStatus,
         winner: row.winner as TeamId | null,
         turn: row.turn,
+        step: row.step,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         finishedAt: row.finishedAt,
@@ -39,6 +41,7 @@ function toData(snapshot: BattleSnapshot) {
         status: snapshot.status,
         winner: snapshot.winner,
         turn: snapshot.turn,
+        step: snapshot.step,
         state: snapshot.state as unknown as Prisma.InputJsonValue,
         finishedAt: snapshot.finishedAt,
     };
@@ -70,11 +73,12 @@ export class BattleRepository implements BattleStore {
         return rows.map(toSummary);
     }
 
-    async saveIfTurn(id: string, expectedTurn: number, snapshot: BattleSnapshot): Promise<BattleRecord | null> {
-        // O "where" com o turno é a trava: se duas requisições chegarem juntas,
-        // só a primeira encontra a linha ainda no turno esperado.
+    async saveIfStep(id: string, expectedStep: number, snapshot: BattleSnapshot): Promise<BattleRecord | null> {
+        // O "where" é a trava: se duas requisições chegarem juntas, só a
+        // primeira encontra a linha ainda na vez esperada. E uma batalha
+        // terminada (por desistência, por exemplo) nunca é regravada.
         const { count } = await prisma.battle.updateMany({
-            where: { id, turn: expectedTurn },
+            where: { id, step: expectedStep, status: 'in_progress' },
             data: toData(snapshot),
         });
 

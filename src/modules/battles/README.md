@@ -28,12 +28,13 @@ respondem 500. O resto da API não é afetado.
 | GET | `/api/battles` | Lista as últimas 20 batalhas do jogador (sem o estado). |
 | GET | `/api/battles/:id` | Estado atual de uma batalha. |
 | POST | `/api/battles/:id/actions` | Envia a jogada da unidade da vez. |
+| POST | `/api/battles/:id/surrender` | Desiste: a batalha termina como derrota do jogador. |
 
 ### Criar
 
 ```json
 POST /api/battles
-{ "team": ["brasa", "muralha", "brisa"] }
+{ "team": ["piromante", "cavaleiro", "clerigo"] }
 ```
 
 `team` aceita de 1 a 3 ids, sem repetir. `enemyTeam` é opcional; sem ele a IA
@@ -43,12 +44,23 @@ recebe um time sorteado do mesmo tamanho.
 
 ```json
 POST /api/battles/:id/actions
-{ "unitId": "A1", "skillId": "brasa.bola-de-fogo", "targetId": "B2" }
+{ "unitId": "A1", "skillId": "piromante.bola-de-fogo", "targetId": "B2" }
 ```
 
 `targetId` só é necessário em habilidades de alvo único.
 
-### Resposta de criar e de jogar
+### Desistir
+
+```
+POST /api/battles/:id/surrender
+```
+
+Sem corpo. Pode ser chamada a qualquer momento enquanto a batalha está em
+andamento. A batalha fica `finished`, com `winner: "B"` e
+`state.surrenderedBy: "A"`, e os eventos são `surrendered` e `battle_ended`.
+Em batalha já terminada responde 409 (`BATTLE_OVER`).
+
+### Resposta de criar, de jogar e de desistir
 
 ```json
 {
@@ -57,22 +69,30 @@ POST /api/battles/:id/actions
         "status": "in_progress",
         "winner": null,
         "playerTeam": "A",
-        "state": { "units": [], "energy": { "A": 4, "B": 3 }, "activeUnitId": "A1", "turn": 2, "winner": null },
-        "availableActions": [],
-        "turnOrder": ["A1", "B1", "A2"]
+        "state": {
+            "units": [],
+            "energy": { "A": 2, "B": 4 },
+            "turnEnergy": 4,
+            "turn": 2,
+            "order": ["B1", "A1", "A2"],
+            "activeUnitId": "A1",
+            "step": 5,
+            "winner": null
+        },
+        "availableActions": []
     },
     "events": []
 }
 ```
 
-- `state` é o estado atual. É o que a tela desenha.
+- `state` é o estado atual. É o que a tela desenha. `energy` é o que cada time ainda tem para gastar neste turno e `turnEnergy` é com quanto os dois começaram o turno. `turn` é o turno (a rodada em que todos agem uma vez), `order` é a ordem de ação desse turno (pode mudar no meio dele, se a velocidade de alguém mudar) e `activeUnitId` diz de quem é a vez; quem vem antes dele em `order` já agiu.
 - `events` é o que aconteceu desde a resposta anterior, em ordem. É o que a tela anima.
 - `availableActions` são os botões da unidade da vez: cada habilidade, se pode
   ser usada agora e em quem.
 
 Depois da jogada do jogador a IA joga sozinha até a vez voltar para ele, então
-uma única resposta pode trazer vários turnos em `events`. Quando a resposta
-chega, ou é a vez do jogador ou a batalha acabou.
+uma única resposta pode trazer várias jogadas (e até a virada de turno) em
+`events`. Quando a resposta chega, ou é a vez do jogador ou a batalha acabou.
 
 ### Erros
 
@@ -85,7 +105,7 @@ chega, ou é a vez do jogador ou a batalha acabou.
 | 400 | `INVALID_TEAM`, `UNKNOWN_CHARACTER`, `INVALID_ACTION` e as regras do jogo: `NOT_YOUR_TURN`, `SKILL_NOT_FOUND`, `NOT_ENOUGH_ENERGY`, `TARGET_REQUIRED`, `INVALID_TARGET`, `UNIT_NOT_FOUND` |
 | 403 | `NOT_YOUR_UNIT` |
 | 404 | `BATTLE_NOT_FOUND` (inclui batalha de outro jogador) |
-| 409 | `BATTLE_OVER`, `BATTLE_CONFLICT` (duas jogadas simultâneas no mesmo turno) |
+| 409 | `BATTLE_OVER`, `BATTLE_CONFLICT` (duas jogadas simultâneas na mesma vez) |
 
 As mensagens ficam em `locales/<idioma>/translation.json`, na seção `battle`.
 

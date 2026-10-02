@@ -35,7 +35,13 @@ function describe(state: BattleState, event: BattleEvent): string | null {
 
     switch (event.type) {
         case 'turn_started':
-            return `\nTurno ${event.turn}: ${label(event.unitId)} | energia do time ${event.team}: ${event.energy}`;
+            return `\n===== Turno ${event.turn} | energia de cada time: ${event.energy} | ordem: ${event.order.map(label).join(' > ')}`;
+
+        case 'order_changed':
+            return `  a ordem do turno mudou: ${event.order.map(label).join(' > ')}`;
+
+        case 'unit_activated':
+            return `\nVez de ${label(event.unitId)}`;
 
         case 'skill_used': {
             const skill = getUnit(state, event.unitId).skills.find((s) => s.id === event.skillId);
@@ -61,8 +67,11 @@ function describe(state: BattleState, event: BattleEvent): string | null {
         case 'status_expired':
             return `    ${STATUS_NAMES[event.status]} de ${label(event.unitId)} acabou`;
 
-        case 'turn_skipped':
+        case 'unit_skipped':
             return `  ${label(event.unitId)} está atordoado e perde a vez`;
+
+        case 'surrendered':
+            return `\nO time ${event.team} desistiu.`;
 
         // Evento técnico (a lista completa de status): não precisa aparecer no terminal.
         case 'statuses_changed':
@@ -85,8 +94,8 @@ function main(): void {
     const seed = Number(process.argv[2] ?? 1);
 
     let { state, events } = createBattle({
-        teamA: [getCharacter('brasa'), getCharacter('muralha'), getCharacter('brisa')],
-        teamB: [getCharacter('faisca'), getCharacter('geada'), getCharacter('espinho')],
+        teamA: [getCharacter('piromante'), getCharacter('cavaleiro'), getCharacter('clerigo')],
+        teamB: [getCharacter('barbaro'), getCharacter('criomante'), getCharacter('guardiao')],
         seed,
     });
 

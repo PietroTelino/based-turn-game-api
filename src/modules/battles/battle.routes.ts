@@ -19,6 +19,7 @@ export function createBattlesRouter(service: BattleService): Router {
     battlesRouter.post('/', controller.create);
     battlesRouter.get('/:id', controller.getById);
     battlesRouter.post('/:id/actions', controller.act);
+    battlesRouter.post('/:id/surrender', controller.surrender);
 
     return battlesRouter;
 }

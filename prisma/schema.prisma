@@ -91,8 +91,10 @@ model Battle {
     status      String    @default("in_progress")
     // "A" (jogador) | "B" (IA) | null enquanto a batalha não termina
     winner      String?
-    // Cópia de state.turn. Serve para recusar duas ações simultâneas no mesmo turno.
+    // Cópia de state.turn: o turno (a rodada em que todos agem uma vez). Aparece no histórico.
     turn        Int       @default(1)
+    // Cópia de state.step: sobe a cada vez jogada. Serve para recusar duas ações simultâneas.
+    step        Int       @default(0)
     // O BattleState inteiro do motor (src/game), em JSON.
     state       Json
 

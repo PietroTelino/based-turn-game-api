@@ -12,7 +12,7 @@ function statusSkill(id: string, effects: SkillEffect[], target: SkillDefinition
 }
 
 function status(kind: StatusKind, overrides: Partial<StatusEffect> = {}): StatusEffect {
-    return { kind, turns: 2, value: 0, sourceId: 'A1', appliedOnTurn: 0, ...overrides };
+    return { kind, turns: 2, value: 0, sourceId: 'A1', appliedOnStep: 0, ...overrides };
 }
 
 /** Joga ataques básicos até a unidade informada estar na vez. Devolve o estado e os eventos do caminho. */
@@ -45,7 +45,7 @@ describe('status: dano por turno', () => {
 
     it('aplica o status e avisa a tela com a lista completa', () => {
         const { state, events } = applyAction(setup(), { unitId: 'A1', skillId: 'a.burn', targetId: 'B1' });
-        const expected = { kind: 'burn', turns: 2, value: 50, sourceId: 'A1', appliedOnTurn: 1 };
+        const expected = { kind: 'burn', turns: 2, value: 50, sourceId: 'A1', appliedOnStep: 1 };
 
         assert.deepEqual(getUnit(state, 'B1').statuses, [expected]);
         assert.deepEqual(eventsOfType(events, 'status_applied'), [
@@ -56,11 +56,14 @@ describe('status: dano por turno', () => {
         ]);
     });
 
-    it('causa dano no começo de cada turno do alvo, ignora a defesa e acaba depois da duração', () => {
-        let state = applyAction(setup(), { unitId: 'A1', skillId: 'a.burn', targetId: 'B1' }).state;
-        const events = [];
+    it('causa dano quando chega a vez do alvo, ignora a defesa e acaba depois da duração', () => {
+        // A vez de B vem logo depois da de A, no mesmo applyAction: a primeira
+        // queimadura já aparece nos eventos desta jogada.
+        const burned = applyAction(setup(), { unitId: 'A1', skillId: 'a.burn', targetId: 'B1' });
+        let state = burned.state;
+        const events = [...burned.events];
 
-        // Tempo suficiente para B jogar bem mais que 2 vezes.
+        // Seis turnos: tempo de sobra para B jogar bem mais que 2 vezes.
         for (let i = 0; i < 12; i++) {
             const result = basicAttackTurn(state);
 
@@ -117,14 +120,19 @@ describe('status: dano por turno', () => {
 describe('status: atordoamento', () => {
     const stun = statusSkill('a.stun', [{ type: 'status', status: 'stun', turns: 1, power: 0 }]);
 
-    it('o alvo perde a próxima vez e depois volta a jogar', () => {
+    it('o alvo perde a vez neste turno e volta a jogar no seguinte', () => {
         const start = createBattle({
             teamA: [makeCharacter('a', { speed: 200, maxHp: 1_000_000 }, [stun])],
             teamB: [makeCharacter('b', { speed: 100, maxHp: 1_000_000 })],
             seed: 1,
         }).state;
 
-        let state = applyAction(start, { unitId: 'A1', skillId: 'a.stun', targetId: 'B1' }).state;
+        const stunned = applyAction(start, { unitId: 'A1', skillId: 'a.stun', targetId: 'B1' });
+
+        assert.deepEqual(eventsOfType(stunned.events, 'unit_skipped'), [{ type: 'unit_skipped', unitId: 'B1', status: 'stun' }]);
+        assert.equal(stunned.state.turn, 2, 'B perdeu a vez, então o turno 1 acabou');
+
+        let state = stunned.state;
         const events = [];
         const actors: string[] = [];
 
@@ -137,9 +145,11 @@ describe('status: atordoamento', () => {
             events.push(...result.events);
         }
 
-        // Sem o atordoamento a ordem seria A, B, A, A, B, A.
-        assert.deepEqual(actors, ['A1', 'A1', 'A1', 'B1', 'A1', 'A1']);
-        assert.deepEqual(eventsOfType(events, 'turn_skipped'), [{ type: 'turn_skipped', unitId: 'B1', status: 'stun' }]);
+        // A atordoou B no turno 1, antes da vez de B: B perdeu a vez e o turno
+        // 2 já começou com A. Dali em diante os dois alternam normalmente.
+        assert.deepEqual(actors, ['A1', 'B1', 'A1', 'B1', 'A1', 'B1']);
+        assert.equal(state.turn, 5);
+        assert.deepEqual(eventsOfType(events, 'unit_skipped'), []);
         assert.deepEqual(getUnit(state, 'B1').statuses, []);
     });
 
@@ -155,8 +165,12 @@ describe('status: atordoamento', () => {
         const missed = applyAction(start, { unitId: 'A1', skillId: 'a.never', targetId: 'B1' });
         const landed = applyAction(start, { unitId: 'A1', skillId: 'a.always', targetId: 'B1' });
 
-        assert.deepEqual(getUnit(missed.state, 'B1').statuses, []);
-        assert.deepEqual(getUnit(landed.state, 'B1').statuses.map((s) => s.kind), ['stun']);
+        // (O atordoamento de 1 turno já é gasto na vez perdida, logo em seguida;
+        // por isso a conferência é pelos eventos, não pelo estado final.)
+        assert.deepEqual(eventsOfType(missed.events, 'status_applied'), []);
+        assert.deepEqual(eventsOfType(missed.events, 'unit_skipped'), []);
+        assert.deepEqual(eventsOfType(landed.events, 'status_applied').map((e) => [e.targetId, e.status]), [['B1', 'stun']]);
+        assert.deepEqual(eventsOfType(landed.events, 'unit_skipped').map((e) => e.unitId), ['B1']);
     });
 });
 
@@ -226,7 +240,6 @@ describe('status: bônus e penalidades de atributo', () => {
     it('um bônus dado a si mesmo vale para as duas próximas vezes, não para a atual', () => {
         const rage = statusSkill('a.rage', [{ type: 'status', status: 'atk_up', turns: 2, power: 0.5 }], 'self');
         let state = createBattle({
-            // B quase não joga: assim só A age durante o teste.
             teamA: [makeCharacter('a', { speed: 200, atk: 100, maxHp: 1_000_000 }, [rage])],
             teamB: [makeCharacter('b', { speed: 1, def: 100, maxHp: 1_000_000 })],
             seed: 1,
@@ -235,36 +248,39 @@ describe('status: bônus e penalidades de atributo', () => {
 
         state = applyAction(state, { unitId: 'A1', skillId: 'a.rage' }).state;
 
-        for (let i = 0; i < 3; i++) {
+        // Três turnos; só interessa o dano que A causa em cada um.
+        for (let i = 0; i < 6; i++) {
+            const attacker = state.activeUnitId;
             const result = basicAttackTurn(state);
 
             state = result.state;
-            damages.push(eventsOfType(result.events, 'damage')[0]?.amount ?? 0);
+
+            if (attacker === 'A1') {
+                damages.push(eventsOfType(result.events, 'damage')[0]?.amount ?? 0);
+            }
         }
 
         // 100 de ATK contra 100 de DEF = 50; com +50% de ATK = 75.
         assert.deepEqual(damages, [75, 75, 50]);
     });
 
-    it('velocidade maior faz jogar mais vezes', () => {
-        const { state: start } = createBattle({
+    it('velocidade maior faz agir antes no turno seguinte', () => {
+        let { state } = createBattle({
             teamA: [makeCharacter('a', { speed: 100, maxHp: 1_000_000 })],
-            teamB: [makeCharacter('b', { speed: 100, maxHp: 1_000_000 })],
+            teamB: [makeCharacter('b', { speed: 150, maxHp: 1_000_000 })],
             seed: 1,
         });
 
-        // Dobra a velocidade de A por muitos turnos.
-        getUnit(start, 'A1').statuses = [status('speed_up', { value: 1, turns: 99 })];
+        assert.deepEqual(state.order, ['B1', 'A1']);
 
-        let state = start;
-        const turns = { A: 0, B: 0 };
+        // Dobra a velocidade de A por muitos turnos: 200 contra 150.
+        getUnit(state, 'A1').statuses = [status('speed_up', { value: 1, turns: 99 })];
 
-        for (let i = 0; i < 30; i++) {
-            turns[getUnit(state, state.activeUnitId ?? '').team] += 1;
-            state = basicAttackTurn(state).state;
-        }
+        state = basicAttackTurn(state).state;
+        state = basicAttackTurn(state).state;
 
-        assert.deepEqual(turns, { A: 20, B: 10 });
+        assert.equal(state.turn, 2);
+        assert.deepEqual(state.order, ['A1', 'B1']);
     });
 
     it('reaplicar o mesmo status substitui o anterior', () => {
@@ -275,7 +291,11 @@ describe('status: bônus e penalidades de atributo', () => {
             seed: 1,
         }).state;
 
+        // Turno 1: A aplica (3 turnos) e B gasta um na própria vez. Turno 2: A reaplica.
         let state = applyAction(start, { unitId: 'A1', skillId: 'a.slow', targetId: 'B1' }).state;
+        state = basicAttackTurn(state).state;
+        assert.deepEqual(getUnit(state, 'B1').statuses.map((s) => [s.kind, s.turns]), [['speed_down', 2]]);
+
         state = applyAction(state, { unitId: 'A1', skillId: 'a.slow', targetId: 'B1' }).state;
 
         assert.deepEqual(getUnit(state, 'B1').statuses.map((s) => [s.kind, s.turns]), [['speed_down', 3]]);

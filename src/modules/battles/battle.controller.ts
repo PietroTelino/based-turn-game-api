@@ -83,6 +83,18 @@ export class BattleController {
         }
     };
 
+    surrender = async (req: Request, res: Response) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
+            }
+
+            return res.json(await this.service.surrender(req.user.id, String(req.params.id)));
+        } catch (error) {
+            return this.handleError(req, res, error);
+        }
+    };
+
     private handleError(req: Request, res: Response, error: unknown) {
         // Regra do jogo quebrada: "não é sua vez", "sem energia"...
         if (error instanceof GameRuleError) {

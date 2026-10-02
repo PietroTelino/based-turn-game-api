@@ -5,7 +5,8 @@ import {
     createBattle,
     getActiveUnit,
     getAvailableActions,
-    previewTurnOrder,
+    surrender,
+    upgradeState,
 } from '../../game';
 import type { BattleAction, BattleEvent, BattleResult, BattleState, CharacterDefinition, TeamId } from '../../game';
 import { BattleError } from './battle.errors';
@@ -24,9 +25,8 @@ export const AI_TEAM: TeamId = 'B';
 
 export const MAX_PLAYER_TEAM_SIZE = 3;
 
-const TURN_ORDER_PREVIEW = 8;
 const LIST_LIMIT = 20;
-const MAX_AI_TURNS_IN_A_ROW = 100;
+const MAX_AI_ACTIONS_IN_A_ROW = 100;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface CreateBattleInput {
@@ -69,8 +69,8 @@ export class BattleService {
             ...(input.seed !== undefined && { seed: input.seed }),
         });
 
-        // Se a IA for mais rápida, ela já abre a batalha.
-        const { state, events } = this.playAiTurns(started);
+        // Se as unidades da IA forem as primeiras da ordem, ela já abre a batalha.
+        const { state, events } = this.playAiActions(started);
         const record = await this.store.create(userId, toSnapshot(state));
 
         return { battle: toView(record), events };
@@ -89,8 +89,23 @@ export class BattleService {
         }
 
         // applyAction valida o resto (vez, energia, alvo...) e lança GameRuleError.
-        const { state, events } = this.playAiTurns(applyAction(record.state, action));
-        const saved = await this.store.saveIfTurn(record.id, record.turn, toSnapshot(state));
+        const { state, events } = this.playAiActions(applyAction(record.state, action));
+        const saved = await this.store.saveIfStep(record.id, record.step, toSnapshot(state));
+
+        if (!saved) {
+            throw new BattleError('BATTLE_CONFLICT', 409, 'battle.conflict');
+        }
+
+        return { battle: toView(saved), events };
+    }
+
+    /** O jogador desiste: a batalha termina agora, com vitória da IA. */
+    async surrender(userId: string, battleId: string): Promise<BattleResponse> {
+        const record = await this.findOwned(userId, battleId);
+
+        // surrender lança GameRuleError (BATTLE_OVER) se a batalha já acabou.
+        const { state, events } = surrender(record.state, PLAYER_TEAM);
+        const saved = await this.store.saveIfStep(record.id, record.step, toSnapshot(state));
 
         if (!saved) {
             throw new BattleError('BATTLE_CONFLICT', 409, 'battle.conflict');
@@ -109,7 +124,9 @@ export class BattleService {
             throw new BattleError('BATTLE_NOT_FOUND', 404, 'battle.notFound');
         }
 
-        return record;
+        // Batalha gravada no formato antigo (antes dos turnos por rodada) é
+        // convertida ao ser lida; as atuais passam direto.
+        return { ...record, state: upgradeState(record.state) };
     }
 
     private resolveTeam(ids: string[]): CharacterDefinition[] {
@@ -143,12 +160,12 @@ export class BattleService {
         return team;
     }
 
-    /** Enquanto for a vez da IA, ela joga. Acumula os eventos de todos os turnos. */
-    private playAiTurns(start: BattleResult): BattleResult {
+    /** Enquanto a vez for de uma unidade da IA, ela joga. Acumula os eventos de todas as jogadas. */
+    private playAiActions(start: BattleResult): BattleResult {
         let state: BattleState = start.state;
         const events: BattleEvent[] = [...start.events];
 
-        for (let i = 0; i < MAX_AI_TURNS_IN_A_ROW; i++) {
+        for (let i = 0; i < MAX_AI_ACTIONS_IN_A_ROW; i++) {
             const active = getActiveUnit(state);
 
             if (!active || active.team !== AI_TEAM) {
@@ -161,7 +178,7 @@ export class BattleService {
             events.push(...result.events);
         }
 
-        throw new Error('A IA jogou turnos demais em sequência');
+        throw new Error('A IA jogou vezes demais em sequência');
     }
 }
 
@@ -172,14 +189,16 @@ function toSnapshot(state: BattleState): BattleSnapshot {
         status: finished ? 'finished' : 'in_progress',
         winner: state.winner,
         turn: state.turn,
+        step: state.step,
         state,
         finishedAt: finished ? new Date() : null,
     };
 }
 
 function toView(record: BattleRecord): BattleView {
-    // rngState fica só no servidor: com ele o jogador poderia prever os críticos.
-    const { rngState: _hidden, ...state } = record.state;
+    // O gerador de números aleatórios e o que ele sorteou no turno ficam só no
+    // servidor: com eles o jogador poderia prever os críticos.
+    const { rngState: _rngState, draws: _draws, ...state } = record.state;
 
     return {
         id: record.id,
@@ -188,7 +207,6 @@ function toView(record: BattleRecord): BattleView {
         playerTeam: PLAYER_TEAM,
         state,
         availableActions: getAvailableActions(record.state),
-        turnOrder: previewTurnOrder(record.state, TURN_ORDER_PREVIEW),
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
         finishedAt: record.finishedAt,

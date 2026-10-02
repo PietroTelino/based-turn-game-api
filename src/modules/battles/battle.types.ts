@@ -6,7 +6,10 @@ export type BattleStatus = 'in_progress' | 'finished';
 export interface BattleSnapshot {
     status: BattleStatus;
     winner: TeamId | null;
+    /** Cópia de state.turn: o turno (rodada) em que a batalha está. Aparece no histórico. */
     turn: number;
+    /** Cópia de state.step: cresce a cada vez jogada. É a "versão" da batalha, usada na trava. */
+    step: number;
     state: BattleState;
     finishedAt: Date | null;
 }
@@ -32,14 +35,17 @@ export interface BattleStore {
     findById(id: string): Promise<BattleRecord | null>;
     findManyByUser(userId: string, limit: number): Promise<BattleSummary[]>;
     /**
-     * Grava só se a batalha ainda estiver no turno esperado.
+     * Grava só se a batalha ainda estiver em andamento e na vez esperada.
      * Devolve null quando outra requisição gravou antes.
      */
-    saveIfTurn(id: string, expectedTurn: number, snapshot: BattleSnapshot): Promise<BattleRecord | null>;
+    saveIfStep(id: string, expectedStep: number, snapshot: BattleSnapshot): Promise<BattleRecord | null>;
 }
 
-/** O estado que o front enxerga: sem o gerador de números aleatórios. */
-export type PublicBattleState = Omit<BattleState, 'rngState'>;
+/**
+ * O estado que o front enxerga: sem o gerador de números aleatórios e sem os
+ * números sorteados no turno (são saídas do mesmo gerador).
+ */
+export type PublicBattleState = Omit<BattleState, 'rngState' | 'draws'>;
 
 export interface BattleView {
     id: string;
@@ -50,8 +56,6 @@ export interface BattleView {
     state: PublicBattleState;
     /** Opções da unidade da vez. Vazio quando a batalha acabou. */
     availableActions: AvailableAction[];
-    /** Previsão dos próximos a jogar, começando por quem está na vez. */
-    turnOrder: string[];
     createdAt: Date;
     updatedAt: Date;
     finishedAt: Date | null;
