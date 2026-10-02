@@ -1,7 +1,7 @@
-# TS Node API Template
+# Based Turn Game API
 
-A simple Node.js + TypeScript API template using Express, Prisma and PostgreSQL.  
-This project is intended to be a reusable base for future APIs.
+API for Based Turn Game, a turn-based battle game. Built with Node.js + TypeScript, Express, Prisma and PostgreSQL.  
+Game rules live in `src/game` and the battle routes in `src/modules/battles`; each folder has its own README.
 
 ---
 
@@ -30,8 +30,8 @@ This project is intended to be a reusable base for future APIs.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/<your-username>/ts-node-api-template.git
-cd ts-node-api-template
+git clone https://github.com/<your-username>/based-turn-game-api.git
+cd based-turn-game-api
 ```
 
 ### 2. Install dependencies
@@ -57,7 +57,7 @@ Create a .env file in the root directory based on .env.example.
 ```env
 DB_HOST=localhost
 DB_PORT=5432
-DB_NAME=surveys-api-node-ts
+DB_NAME=based_turn_game
 DB_USER=postgres
 DB_PASSWORD=root
 ```
@@ -78,7 +78,7 @@ This generated URL is used by:
 ### 2. Required variables
 If you prefer to define the connection string manually, you can still set:
 ```env
-DATABASE_URL=postgresql://postgres:root@localhost:5432/surveys-api-node-ts?schema=public
+DATABASE_URL=postgresql://postgres:root@localhost:5432/based_turn_game?schema=public
 ```
 
 ### 3. Authentication (JWT)

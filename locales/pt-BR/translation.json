@@ -74,5 +74,25 @@
         "mustBeText": "O e-mail deve ser um texto.",
         "required": "O e-mail é obrigatório.",
         "invalidFormat": "O formato do e-mail é inválido."
+    },
+    "battle": {
+        "notFound": "Batalha não encontrada",
+        "teamRequired": "Informe o time: uma lista com os ids dos personagens",
+        "invalidTeam": "Escolha de 1 a {{max}} personagens, sem repetir",
+        "unknownCharacter": "Personagem desconhecido: {{id}}",
+        "invalidAction": "Informe unitId e skillId (e targetId, quando a habilidade pedir um alvo)",
+        "notYourUnit": "Essa unidade não é sua",
+        "conflict": "A batalha mudou enquanto sua ação era processada. Atualize e tente de novo.",
+        "errorUnexpected": "Erro ao processar a batalha",
+        "rules": {
+            "INVALID_SETUP": "Configuração de batalha inválida",
+            "BATTLE_OVER": "A batalha já terminou",
+            "UNIT_NOT_FOUND": "Unidade não encontrada",
+            "NOT_YOUR_TURN": "Não é a vez dessa unidade",
+            "SKILL_NOT_FOUND": "Essa unidade não tem essa habilidade",
+            "NOT_ENOUGH_ENERGY": "Energia insuficiente",
+            "TARGET_REQUIRED": "Escolha um alvo",
+            "INVALID_TARGET": "Alvo inválido"
+        }
     }
 }

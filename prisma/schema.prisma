@@ -25,6 +25,7 @@ model User {
     refreshTokens   RefreshToken[]
     auditLogs       AuditLog[]      @relation("UserAudits")
     performedAudits AuditLog[]      @relation("PerformedByAudits")
+    battles         Battle[]
 
     @@map("users")
 }
@@ -79,4 +80,26 @@ model AuditLog {
     @@index([action])
     @@index([entity])
     @@index([createdAt])
+}
+
+model Battle {
+    id          String    @id @default(uuid()) @db.Uuid
+    userId      String    @map("user_id") @db.Uuid
+    user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    // "in_progress" | "finished"
+    status      String    @default("in_progress")
+    // "A" (jogador) | "B" (IA) | null enquanto a batalha não termina
+    winner      String?
+    // Cópia de state.turn. Serve para recusar duas ações simultâneas no mesmo turno.
+    turn        Int       @default(1)
+    // O BattleState inteiro do motor (src/game), em JSON.
+    state       Json
+
+    createdAt   DateTime  @default(now()) @map("created_at")
+    updatedAt   DateTime  @updatedAt      @map("updated_at")
+    finishedAt  DateTime? @map("finished_at")
+
+    @@map("battles")
+    @@index([userId, createdAt])
 }

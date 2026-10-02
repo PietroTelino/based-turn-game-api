@@ -74,5 +74,25 @@
         "mustBeText": "Email must be a string.",
         "required": "Email is required.",
         "invalidFormat": "Invalid email format."
+    },
+    "battle": {
+        "notFound": "Battle not found",
+        "teamRequired": "Provide the team: a list of character ids",
+        "invalidTeam": "Choose 1 to {{max}} characters, with no repeats",
+        "unknownCharacter": "Unknown character: {{id}}",
+        "invalidAction": "Provide unitId and skillId (and targetId when the skill needs a target)",
+        "notYourUnit": "That unit is not yours",
+        "conflict": "The battle changed while your action was being processed. Refresh and try again.",
+        "errorUnexpected": "Error while processing the battle",
+        "rules": {
+            "INVALID_SETUP": "Invalid battle setup",
+            "BATTLE_OVER": "The battle is already over",
+            "UNIT_NOT_FOUND": "Unit not found",
+            "NOT_YOUR_TURN": "It is not that unit's turn",
+            "SKILL_NOT_FOUND": "That unit does not have that skill",
+            "NOT_ENOUGH_ENERGY": "Not enough energy",
+            "TARGET_REQUIRED": "Choose a target",
+            "INVALID_TARGET": "Invalid target"
+        }
     }
 }
