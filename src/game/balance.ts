@@ -8,7 +8,7 @@
  * longas demais, os números precisam de ajuste.
  *
  * Com poucos personagens ele simula todos os confrontos possíveis. Quando
- * são muitos (com 12 personagens há 48 mil pares de times), sorteia uma
+ * são muitos (com 12 personagens e times de 5 há mais de 600 mil pares de times), sorteia uma
  * amostra de MAX_BATTLES confrontos. O sorteio usa uma semente fixa, então o
  * relatório é sempre o mesmo para os mesmos números.
  */
@@ -17,7 +17,7 @@ import { CHARACTERS } from './data/characters';
 import { applyAction, createBattle } from './engine';
 import type { CharacterDefinition, TeamId } from './types';
 
-const TEAM_SIZE = 3;
+const TEAM_SIZE = 5;
 const SEEDS = [1, 2, 3];
 const TURN_LIMIT = 200;
 /** Acima disto o relatório sorteia uma amostra em vez de simular tudo. */

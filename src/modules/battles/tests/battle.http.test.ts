@@ -48,7 +48,7 @@ describe('rotas /api/battles', () => {
 
         app.use(middleware.handle(i18next));
         app.use(express.json());
-        app.use('/api/battles', createBattlesRouter(new BattleService(new InMemoryBattleStore(), () => 0)));
+        app.use('/api/battles', createBattlesRouter(new BattleService(new InMemoryBattleStore(), () => 0, { teamSize: 1 })));
 
         server = app.listen(0);
         await once(server, 'listening');
@@ -141,10 +141,14 @@ describe('rotas /api/battles', () => {
     it('corpo inválido responde 400 com código e mensagem', async () => {
         const noTeam = await call('POST', '/', { token: player, body: {} });
         const unknown = await call('POST', '/', { token: player, body: { team: ['dragao'] } });
+        // O serviço deste teste exige times de 1 (no jogo são 5): dois personagens é o tamanho errado.
+        const wrongSize = await call('POST', '/', { token: player, body: { team: ['barbaro', 'cavaleiro'] } });
         const created = await call('POST', '/', { token: player, body: { team: ['barbaro'], enemyTeam: ['cavaleiro'] } });
         const noSkill = await call('POST', `/${created.body.battle.id}/actions`, { token: player, body: { unitId: 'A1' } });
 
         assert.deepEqual([noTeam.status, noTeam.body.code], [400, 'INVALID_TEAM']);
+        assert.deepEqual([wrongSize.status, wrongSize.body.code], [400, 'INVALID_TEAM']);
+        assert.match(wrongSize.body.message, /exatamente 1 /, 'a mensagem diz o tamanho obrigatório');
         assert.deepEqual(unknown.body, { code: 'UNKNOWN_CHARACTER', message: 'Personagem desconhecido: dragao' });
         assert.deepEqual([noSkill.status, noSkill.body.code], [400, 'INVALID_ACTION']);
     });

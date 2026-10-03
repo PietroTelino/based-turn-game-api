@@ -34,11 +34,14 @@ respondem 500. O resto da API não é afetado.
 
 ```json
 POST /api/battles
-{ "team": ["piromante", "cavaleiro", "clerigo"] }
+{ "team": ["piromante", "cavaleiro", "clerigo", "driade", "arqueiro"] }
 ```
 
-`team` aceita de 1 a 3 ids, sem repetir. `enemyTeam` é opcional; sem ele a IA
-recebe um time sorteado do mesmo tamanho.
+Toda batalha é 5 contra 5: `team` precisa ter exatamente 5 ids, sem repetir
+(`TEAM_SIZE` em `battle.service.ts`). Qualquer outro tamanho responde 400 com
+`INVALID_TEAM`. `enemyTeam` é opcional e segue a mesma regra; sem ele a IA
+recebe cinco personagens sorteados. O motor (`src/game`) continua aceitando
+times de 1 a 6, e é assim que os testes fazem batalhas pequenas.
 
 ### Jogar
 

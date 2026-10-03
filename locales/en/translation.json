@@ -78,7 +78,7 @@
     "battle": {
         "notFound": "Battle not found",
         "teamRequired": "Provide the team: a list of character ids",
-        "invalidTeam": "Choose 1 to {{max}} characters, with no repeats",
+        "invalidTeam": "The team must have exactly {{size}} characters, with no repeats",
         "unknownCharacter": "Unknown character: {{id}}",
         "invalidAction": "Provide unitId and skillId (and targetId when the skill needs a target)",
         "notYourUnit": "That unit is not yours",

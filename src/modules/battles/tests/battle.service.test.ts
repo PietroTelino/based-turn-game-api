@@ -4,19 +4,26 @@ import { FURY_DAMAGE_PER_TURN, FURY_START_TURN, GameRuleError, chooseAction, cre
 import type { BattleState, GameRuleErrorCode } from '../../../game';
 import { BattleError } from '../battle.errors';
 import type { BattleErrorCode } from '../battle.errors';
-import { BattleService } from '../battle.service';
+import { BattleService, TEAM_SIZE } from '../battle.service';
 import { InMemoryBattleStore } from './in-memory-store';
 
 const PLAYER = 'jogador-1';
 const OTHER_PLAYER = 'jogador-2';
 
-function setup() {
+/**
+ * No jogo toda batalha é 5 contra 5. A maioria dos testes usa 1 contra 1,
+ * que dá para acompanhar jogada a jogada; os que testam o tamanho do time
+ * pedem o tamanho de verdade (TEAM_SIZE).
+ */
+function setup(teamSize = 1) {
     const store = new InMemoryBattleStore();
     // random fixo em 0: o time sorteado da IA é sempre o começo do catálogo.
-    const service = new BattleService(store, () => 0);
+    const service = new BattleService(store, () => 0, { teamSize });
 
     return { store, service };
 }
+
+const FIVE = ['barbaro', 'criomante', 'guardiao', 'clerigo', 'arqueiro'];
 
 function rejectsWith(promise: Promise<unknown>, code: BattleErrorCode): Promise<void> {
     return assert.rejects(promise, (error: unknown) => error instanceof BattleError && error.code === code, code);
@@ -83,7 +90,7 @@ describe('BattleService: criar batalha', () => {
     });
 
     it('sorteia para a IA um time do mesmo tamanho, sem repetir personagem', async () => {
-        const { service } = setup();
+        const { service } = setup(3);
 
         const { battle } = await service.create(PLAYER, { team: ['barbaro', 'criomante', 'guardiao'], seed: 1 });
         const enemies = battle.state.units.filter((u) => u.team === 'B').map((u) => u.characterId);
@@ -92,14 +99,39 @@ describe('BattleService: criar batalha', () => {
         assert.equal(new Set(enemies).size, 3);
     });
 
-    it('recusa times inválidos', async () => {
-        const { service } = setup();
+    it('toda batalha é 5 contra 5: aceita exatamente cinco, e a IA entra com cinco também', async () => {
+        const store = new InMemoryBattleStore();
+        // Sem a opção de teste: é o serviço como o jogo usa.
+        const service = new BattleService(store, () => 0);
 
-        await rejectsWith(service.create(PLAYER, { team: [] }), 'INVALID_TEAM');
+        const { battle } = await service.create(PLAYER, { team: FIVE, seed: 1 });
+        const idsOf = (side: string) => battle.state.units.filter((u) => u.team === side).map((u) => u.characterId);
+
+        assert.equal(FIVE.length, TEAM_SIZE);
+        assert.deepEqual(idsOf('A'), FIVE);
+        assert.equal(new Set(idsOf('B')).size, TEAM_SIZE);
+        assert.equal(battle.state.order.length, 2 * TEAM_SIZE, 'as dez unidades entram na ordem do turno');
+    });
+
+    it('recusa qualquer time que não tenha exatamente cinco personagens, do jogador ou da IA', async () => {
+        const service = new BattleService(new InMemoryBattleStore(), () => 0);
+
+        for (const size of [0, 1, 2, 3, 4]) {
+            await rejectsWith(service.create(PLAYER, { team: FIVE.slice(0, size) }), 'INVALID_TEAM');
+        }
+
+        await rejectsWith(service.create(PLAYER, { team: [...FIVE, 'ladino'] }), 'INVALID_TEAM');
+        await rejectsWith(service.create(PLAYER, { team: ['barbaro', 'barbaro', 'guardiao', 'clerigo', 'arqueiro'] }), 'INVALID_TEAM');
+        await rejectsWith(service.create(PLAYER, { team: FIVE, enemyTeam: ['cavaleiro'] }), 'INVALID_TEAM');
+        await rejectsWith(service.create(PLAYER, { team: FIVE, enemyTeam: ['cavaleiro', 'ladino', 'vampiro', 'driade', 'banshee', 'piromante'] }), 'INVALID_TEAM');
+    });
+
+    it('recusa personagem repetido e personagem que não existe', async () => {
+        const { service } = setup(2);
+
         await rejectsWith(service.create(PLAYER, { team: ['piromante', 'piromante'] }), 'INVALID_TEAM');
-        await rejectsWith(service.create(PLAYER, { team: ['piromante', 'cavaleiro', 'clerigo', 'criomante'] }), 'INVALID_TEAM');
-        await rejectsWith(service.create(PLAYER, { team: ['nao-existe'] }), 'UNKNOWN_CHARACTER');
-        await rejectsWith(service.create(PLAYER, { team: ['piromante'], enemyTeam: ['nao-existe'] }), 'UNKNOWN_CHARACTER');
+        await rejectsWith(service.create(PLAYER, { team: ['piromante', 'nao-existe'] }), 'UNKNOWN_CHARACTER');
+        await rejectsWith(service.create(PLAYER, { team: ['piromante', 'clerigo'], enemyTeam: ['cavaleiro', 'nao-existe'] }), 'UNKNOWN_CHARACTER');
     });
 });
 
@@ -172,7 +204,7 @@ describe('BattleService: jogar', () => {
     });
 
     it('a batalha chega ao fim, registra o vencedor e não aceita mais ações', async () => {
-        const { store, service } = setup();
+        const { store, service } = setup(3);
         let { battle } = await service.create(PLAYER, {
             team: ['piromante', 'cavaleiro', 'clerigo'],
             enemyTeam: ['barbaro', 'criomante', 'guardiao'],

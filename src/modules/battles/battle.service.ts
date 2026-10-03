@@ -24,16 +24,17 @@ import type {
 export const PLAYER_TEAM: TeamId = 'A';
 export const AI_TEAM: TeamId = 'B';
 
-export const MAX_PLAYER_TEAM_SIZE = 3;
+/** Toda batalha é 5 contra 5: os dois times entram com exatamente este número de personagens. */
+export const TEAM_SIZE = 5;
 
 const LIST_LIMIT = 20;
 const MAX_AI_ACTIONS_IN_A_ROW = 100;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface CreateBattleInput {
-    /** Ids dos personagens do jogador. */
+    /** Ids dos personagens do jogador: exatamente TEAM_SIZE, sem repetir. */
     team: string[];
-    /** Ids dos personagens da IA. Se faltar, o time é sorteado. */
+    /** Ids dos personagens da IA, com a mesma regra. Se faltar, o time é sorteado. */
     enemyTeam?: string[];
     /** Semente do motor. Só os testes usam; a rota HTTP não aceita. */
     seed?: number;
@@ -47,10 +48,20 @@ export interface CreateBattleInput {
  * vez voltar para ele, e só então o resultado é gravado e devolvido.
  */
 export class BattleService {
+    private teamSize: number;
+
     constructor(
         private store: BattleStore,
         private random: () => number = Math.random,
-    ) {}
+        /**
+         * `teamSize` troca o tamanho obrigatório dos times. O jogo nunca passa
+         * isto (vale TEAM_SIZE); existe para os testes poderem usar batalhas
+         * de 1 contra 1, que são muito mais fáceis de acompanhar.
+         */
+        options: { teamSize?: number } = {},
+    ) {
+        this.teamSize = options.teamSize ?? TEAM_SIZE;
+    }
 
     listCharacters(): CharacterDefinition[] {
         return CHARACTERS;
@@ -133,8 +144,8 @@ export class BattleService {
     private resolveTeam(ids: string[]): CharacterDefinition[] {
         const hasDuplicates = new Set(ids).size !== ids.length;
 
-        if (ids.length < 1 || ids.length > MAX_PLAYER_TEAM_SIZE || hasDuplicates) {
-            throw new BattleError('INVALID_TEAM', 400, 'battle.invalidTeam', { max: String(MAX_PLAYER_TEAM_SIZE) });
+        if (ids.length !== this.teamSize || hasDuplicates) {
+            throw new BattleError('INVALID_TEAM', 400, 'battle.invalidTeam', { size: String(this.teamSize) });
         }
 
         return ids.map((id) => {

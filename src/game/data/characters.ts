@@ -356,12 +356,12 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'vampiro.banquete-de-sangue',
                 name: 'Banquete de Sangue',
-                description: 'Atinge todos os inimigos e recupera vida igual a 40% do dano causado.',
+                description: 'Atinge todos os inimigos e recupera vida igual a 30% do dano causado.',
                 energyCost: 4,
                 target: 'all-enemies',
                 element: 'shadow',
                 effects: [
-                    { type: 'damage', power: 0.8, drain: 0.4 },
+                    { type: 'damage', power: 0.75, drain: 0.3 },
                 ],
             },
         ],
@@ -370,7 +370,7 @@ export const CHARACTERS: CharacterDefinition[] = [
         id: 'driade',
         name: 'Dríade',
         role: 'support',
-        stats: { maxHp: 820, atk: 170, def: 45, speed: 110, critChance: 0.05, critDamage: 1.5 },
+        stats: { maxHp: 860, atk: 170, def: 45, speed: 110, critChance: 0.05, critDamage: 1.5 },
         skills: [
             {
                 id: 'driade.espinhos',
@@ -428,7 +428,7 @@ export const CHARACTERS: CharacterDefinition[] = [
         id: 'ladino',
         name: 'Ladino',
         role: 'assassin',
-        stats: { maxHp: 640, atk: 200, def: 30, speed: 140, critChance: 0.35, critDamage: 1.8 },
+        stats: { maxHp: 680, atk: 200, def: 30, speed: 140, critChance: 0.35, critDamage: 1.8 },
         skills: [
             {
                 id: 'ladino.punhalada',
@@ -470,7 +470,7 @@ export const CHARACTERS: CharacterDefinition[] = [
         id: 'espadachim',
         name: 'Espadachim',
         role: 'fighter',
-        stats: { maxHp: 780, atk: 175, def: 50, speed: 125, critChance: 0.2, critDamage: 1.5 },
+        stats: { maxHp: 850, atk: 188, def: 50, speed: 125, critChance: 0.2, critDamage: 1.5 },
         skills: [
             {
                 id: 'espadachim.estocada',
@@ -550,7 +550,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 element: 'physical',
                 ranged: true,
                 effects: [
-                    { type: 'damage', power: 1.0 },
+                    { type: 'damage', power: 0.9 },
                 ],
             },
         ],

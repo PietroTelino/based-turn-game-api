@@ -78,7 +78,7 @@
     "battle": {
         "notFound": "Batalha não encontrada",
         "teamRequired": "Informe o time: uma lista com os ids dos personagens",
-        "invalidTeam": "Escolha de 1 a {{max}} personagens, sem repetir",
+        "invalidTeam": "O time precisa ter exatamente {{size}} personagens, sem repetir",
         "unknownCharacter": "Personagem desconhecido: {{id}}",
         "invalidAction": "Informe unitId e skillId (e targetId, quando a habilidade pedir um alvo)",
         "notYourUnit": "Essa unidade não é sua",
