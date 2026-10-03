@@ -110,6 +110,59 @@ export interface SkillDefinition {
     ranged?: boolean;
 }
 
+/**
+ * Quando uma passiva de golpe vale, olhando para o alvo do golpe.
+ * Uma passiva sem condição vale em todo golpe.
+ */
+export type PassiveCondition =
+    /** O alvo carrega pelo menos um destes status. */
+    | { type: 'target_has_status'; statuses: StatusKind[] }
+    /** O alvo está com menos desta fração da vida (0.4 = abaixo de 40%). */
+    | { type: 'target_hp_below'; ratio: number }
+    /** O alvo está com mais desta fração da vida. */
+    | { type: 'target_hp_above'; ratio: number };
+
+/**
+ * O que uma passiva faz. Ninguém "usa" uma passiva: ela vale o tempo todo
+ * para a unidade que a tem, e o motor a aplica na hora certa.
+ *
+ * As primeiras mudam os golpes da própria unidade (os efeitos 'damage' das
+ * habilidades dela):
+ * - damage_bonus: o golpe causa mais dano (0.3 = +30%);
+ * - crit_chance_bonus: soma à chance de crítico (0.3 = +30 pontos);
+ * - ignore_defense: o golpe ignora esta fração da defesa do alvo;
+ * - atk_from_def: soma ao ataque esta fração da defesa de quem bate;
+ * - lifesteal: quem bate recupera esta fração do dano que o alvo perdeu
+ *   (soma com o `drain` da habilidade);
+ * - energy_on_crit: num acerto crítico, o time recupera esta energia.
+ *
+ * status_power aumenta o valor dos status que a unidade aplica (0.4 = +40%).
+ *
+ * turn_start é a passiva que age sozinha: no começo da vez da unidade (se ela
+ * não estiver atordoada), os `effects` são aplicados no alvo indicado, como
+ * se fossem uma habilidade sem custo.
+ */
+export type PassiveEffect =
+    | { type: 'damage_bonus'; amount: number; when?: PassiveCondition }
+    | { type: 'crit_chance_bonus'; amount: number; when?: PassiveCondition }
+    | { type: 'ignore_defense'; amount: number }
+    | { type: 'atk_from_def'; amount: number }
+    | { type: 'lifesteal'; amount: number }
+    | { type: 'energy_on_crit'; amount: number }
+    | { type: 'status_power'; statuses: StatusKind[]; amount: number }
+    | { type: 'turn_start'; target: 'all-allies' | 'fastest-enemy'; effects: SkillEffect[] };
+
+export interface PassiveDefinition {
+    /** "<personagem>.<passiva>", como nas habilidades. */
+    id: string;
+    name: string;
+    description: string;
+    effect: PassiveEffect;
+    /** Como em SkillDefinition: só para a tela escolher o efeito visual e o som. */
+    element?: SkillElement;
+    ranged?: boolean;
+}
+
 export type CharacterRole = 'attacker' | 'tank' | 'support' | 'assassin' | 'mage' | 'fighter';
 
 /** A "ficha" de um personagem: o molde a partir do qual as unidades são criadas. */
@@ -120,6 +173,8 @@ export interface CharacterDefinition {
     stats: Stats;
     /** A primeira habilidade é sempre o ataque básico (custo 0, alvo inimigo). */
     skills: SkillDefinition[];
+    /** Todo personagem tem pelo menos uma passiva. */
+    passives: PassiveDefinition[];
 }
 
 /** Um personagem dentro de uma batalha específica. */
@@ -139,6 +194,11 @@ export interface BattleUnit {
      * batalha em andamento, e o front recebe tudo o que precisa mostrar.
      */
     skills: SkillDefinition[];
+    /**
+     * Cópia das passivas, como as habilidades. Batalhas gravadas antes de as
+     * passivas existirem não têm o campo: nelas ninguém tem passiva.
+     */
+    passives?: PassiveDefinition[];
 }
 
 export interface BattleState {
@@ -230,6 +290,16 @@ export type BattleEvent =
     /** A unidade perdeu a vez (atordoada). */
     | { type: 'unit_skipped'; unitId: string; status: StatusKind }
     | { type: 'unit_defeated'; unitId: string }
+    /**
+     * A passiva de uma unidade fez diferença agora. Para as passivas de golpe,
+     * vem antes do dano que ela mudou, uma vez por ação, e `targetIds` é o
+     * alvo desse golpe. Para as de começo de vez, vem antes dos efeitos dela, e
+     * `targetIds` é quem ela atingiu. Passivas que valem em todo golpe (como
+     * roubo de vida) não avisam: o resultado já aparece nos outros eventos.
+     */
+    | { type: 'passive_triggered'; unitId: string; passiveId: string; targetIds: string[] }
+    /** O time recuperou energia no meio do turno, por causa de `unitId`. `energy` é quanto ele tem agora. */
+    | { type: 'energy_gained'; team: TeamId; unitId: string; amount: number; energy: number }
     /** Um time desistiu. Vem sempre seguido de battle_ended. */
     | { type: 'surrendered'; team: TeamId }
     | { type: 'battle_ended'; winner: TeamId };
@@ -242,8 +312,9 @@ export interface BattleResult {
 /**
  * Os números de uma habilidade para quem vai usá-la agora: é o que a tela
  * mostra junto da descrição. São valores "base": já contam o ataque atual de
- * quem usa (com bônus e penalidades) e a fúria, mas não a defesa nem o escudo
- * do alvo, nem o acerto crítico. `null` quando a habilidade não causa dano
+ * quem usa (com bônus e penalidades), a fúria e as passivas que valem em todo
+ * golpe, mas não a defesa nem o escudo do alvo, nem o acerto crítico, nem as
+ * passivas que dependem do alvo. `null` quando a habilidade não causa dano
  * (ou não cura).
  */
 export interface SkillPreview {

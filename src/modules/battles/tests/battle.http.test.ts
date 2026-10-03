@@ -71,7 +71,8 @@ describe('rotas /api/battles', () => {
 
         assert.equal(status, 200);
         assert.equal(body.length, CHARACTERS.length);
-        assert.deepEqual(Object.keys(body[0]).sort(), ['id', 'name', 'role', 'skills', 'stats']);
+        assert.deepEqual(Object.keys(body[0]).sort(), ['id', 'name', 'passives', 'role', 'skills', 'stats']);
+        assert.ok(body.every((character: { passives: unknown[] }) => character.passives.length >= 1), 'todo personagem vem com a passiva');
     });
 
     it('fluxo completo: criar, buscar, jogar e listar', async () => {

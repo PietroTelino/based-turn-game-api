@@ -17,6 +17,8 @@ import type {
     BattleState,
     BattleUnit,
     CharacterDefinition,
+    PassiveCondition,
+    PassiveDefinition,
     SkillDefinition,
     SkillEffect,
     SkillPreview,
@@ -56,8 +58,13 @@ import type {
  *   1. chega a vez da unidade;
  *   2. queimadura e veneno causam dano;
  *   3. se a unidade está atordoada, perde a vez (volta ao passo 1 com a próxima);
- *   4. a unidade age (applyAction);
- *   5. termina a vez: os status dela gastam um turno de duração.
+ *   4. a passiva de começo de vez da unidade age, se ela tiver uma;
+ *   5. a unidade age (applyAction);
+ *   6. termina a vez: os status dela gastam um turno de duração.
+ *
+ * Passivas: cada unidade tem as suas (`unit.passives`). Ninguém as usa; o
+ * motor as aplica sozinho. A maioria muda os golpes da própria unidade (ver
+ * `getHitModifiers`); as de começo de vez agem no passo 4.
  */
 
 export interface BattleSetup {
@@ -116,6 +123,110 @@ export function hasStatus(unit: BattleUnit, kind: StatusKind): boolean {
     return getStatuses(unit).some((status) => status.kind === kind);
 }
 
+/** As passivas de uma unidade. Batalhas gravadas antes de elas existirem não têm o campo. */
+export function getPassives(unit: BattleUnit): PassiveDefinition[] {
+    return unit.passives ?? [];
+}
+
+function meets(condition: PassiveCondition | undefined, target: BattleUnit): boolean {
+    if (!condition) {
+        return true;
+    }
+
+    switch (condition.type) {
+        case 'target_has_status':
+            return condition.statuses.some((kind) => hasStatus(target, kind));
+        case 'target_hp_below':
+            return target.hp < target.stats.maxHp * condition.ratio;
+        case 'target_hp_above':
+            return target.hp > target.stats.maxHp * condition.ratio;
+    }
+}
+
+/** O que as passivas de quem bate mudam num golpe. */
+interface HitModifiers {
+    /** Fração somada ao dano (0.3 = +30%). */
+    damageBonus: number;
+    /** Somado à chance de crítico. */
+    critChanceBonus: number;
+    /** Fração da defesa do alvo que o golpe ignora. */
+    ignoreDefense: number;
+    /** Fração do dano causado que volta como vida. */
+    lifesteal: number;
+    /** Energia que o time recupera se o golpe for crítico. */
+    energyOnCrit: number;
+    /** As passivas que só valeram por causa deste alvo: são as que a tela anuncia. */
+    announced: PassiveDefinition[];
+}
+
+/**
+ * Junta o que as passivas de `attacker` fazem num golpe. Com `target`, conta
+ * também as que dependem do alvo; sem ele (na prévia da habilidade), só as
+ * que valem sempre.
+ */
+function getHitModifiers(attacker: BattleUnit, target?: BattleUnit): HitModifiers {
+    const modifiers: HitModifiers = { damageBonus: 0, critChanceBonus: 0, ignoreDefense: 0, lifesteal: 0, energyOnCrit: 0, announced: [] };
+
+    for (const passive of getPassives(attacker)) {
+        const { effect } = passive;
+
+        switch (effect.type) {
+            case 'damage_bonus':
+            case 'crit_chance_bonus': {
+                if (effect.when && (!target || !meets(effect.when, target))) {
+                    break;
+                }
+
+                if (effect.type === 'damage_bonus') modifiers.damageBonus += effect.amount;
+                else modifiers.critChanceBonus += effect.amount;
+
+                if (effect.when) modifiers.announced.push(passive);
+
+                break;
+            }
+
+            case 'ignore_defense':
+                modifiers.ignoreDefense += effect.amount;
+                break;
+
+            case 'lifesteal':
+                modifiers.lifesteal += effect.amount;
+                break;
+
+            case 'energy_on_crit':
+                modifiers.energyOnCrit += effect.amount;
+                break;
+
+            // Não mudam o golpe aqui: entram no ataque (getAttackStats), no
+            // valor dos status ou no começo da vez.
+            case 'atk_from_def':
+            case 'status_power':
+            case 'turn_start':
+                break;
+        }
+    }
+
+    return modifiers;
+}
+
+/**
+ * Os atributos com que a unidade bate: os de `getEffectiveStats` mais o que
+ * as passivas dela somam ao ataque dos golpes. Cura e status continuam usando
+ * o ataque sem esse acréscimo.
+ */
+export function getAttackStats(unit: BattleUnit): Stats {
+    const stats = getEffectiveStats(unit);
+    let atk = stats.atk;
+
+    for (const { effect } of getPassives(unit)) {
+        if (effect.type === 'atk_from_def') {
+            atk += stats.def * effect.amount;
+        }
+    }
+
+    return { ...stats, atk };
+}
+
 /**
  * Atributos da unidade já com bônus e penalidades de status.
  * Todo cálculo de combate usa estes valores, nunca `unit.stats` direto.
@@ -151,21 +262,22 @@ export function calculateDamage(
     defender: Stats,
     power: number,
     critical: boolean,
-    furyMultiplier = 1,
+    /** Tudo o que multiplica o dano por fora: a fúria e o bônus das passivas. */
+    multiplier = 1,
 ): number {
     const raw = attacker.atk * power;
     const mitigation = 100 / (100 + defender.def);
     const critMultiplier = critical ? attacker.critDamage : 1;
 
-    return Math.max(1, Math.round(raw * mitigation * critMultiplier * furyMultiplier));
+    return Math.max(1, Math.round(raw * mitigation * critMultiplier * multiplier));
 }
 
 /**
  * O dano de um golpe antes da defesa do alvo e sem crítico: ATK x poder (x
  * fúria). É o número que a tela mostra na descrição da habilidade.
  */
-export function calculateBaseDamage(attacker: Stats, power: number, furyMultiplier = 1): number {
-    return Math.max(1, Math.round(attacker.atk * power * furyMultiplier));
+export function calculateBaseDamage(attacker: Stats, power: number, multiplier = 1): number {
+    return Math.max(1, Math.round(attacker.atk * power * multiplier));
 }
 
 /**
@@ -239,13 +351,14 @@ export function getAvailableActions(state: BattleState): AvailableAction[] {
  */
 export function previewSkill(state: BattleState, actor: BattleUnit, skill: SkillDefinition): SkillPreview {
     const stats = getEffectiveStats(actor);
-    const fury = getFuryMultiplier(state.turn);
+    // Só as passivas que valem em qualquer golpe: as que dependem do alvo não entram na prévia.
+    const multiplier = getFuryMultiplier(state.turn) * (1 + getHitModifiers(actor).damageBonus);
     let damage: number | null = null;
     let heal: number | null = null;
 
     for (const effect of skill.effects) {
         if (effect.type === 'damage') {
-            damage = (damage ?? 0) + calculateBaseDamage(stats, effect.power, fury);
+            damage = (damage ?? 0) + calculateBaseDamage(getAttackStats(actor), effect.power, multiplier);
         } else if (effect.type === 'heal') {
             heal = (heal ?? 0) + calculateHeal(stats, effect.power);
         }
@@ -305,6 +418,7 @@ function buildTeam(team: TeamId, characters: CharacterDefinition[]): BattleUnit[
             hp: character.stats.maxHp,
             statuses: [],
             skills: structuredClone(character.skills),
+            passives: structuredClone(character.passives ?? []),
         };
     });
 }
@@ -462,14 +576,24 @@ function applyEffect(
 
     switch (effect.type) {
         case 'damage': {
-            const critical = rollChance(state, actor.stats.critChance);
-            const fury = getFuryMultiplier(state.turn);
+            const modifiers = getHitModifiers(actor, target);
+
+            // Uma passiva que só valeu por causa do alvo é anunciada antes do
+            // dano que ela mudou, uma vez por ação.
+            for (const passive of modifiers.announced) {
+                announcePassive(actor, passive, [target.id], events);
+            }
+
+            // Sempre um sorteio por golpe, com ou sem passiva: a sequência de
+            // números aleatórios da batalha não depende de quem tem o quê.
+            const critical = rollChance(state, actor.stats.critChance + modifiers.critChanceBonus);
+            const defender = getEffectiveStats(target);
             const amount = calculateDamage(
-                getEffectiveStats(actor),
-                getEffectiveStats(target),
+                getAttackStats(actor),
+                { ...defender, def: defender.def * Math.max(0, 1 - modifiers.ignoreDefense) },
                 effect.power,
                 critical,
-                fury,
+                getFuryMultiplier(state.turn) * (1 + modifiers.damageBonus),
             );
             const absorbed = absorbWithShield(target, amount);
             const lost = Math.min(target.hp, amount - absorbed);
@@ -493,14 +617,22 @@ function applyEffect(
                 pushStatusesChanged(target, events);
             }
 
-            // Roubo de vida: quem bateu recupera uma fração do que o alvo perdeu.
-            if (effect.drain !== undefined && lost > 0) {
-                const healed = Math.min(actor.stats.maxHp - actor.hp, Math.round(lost * effect.drain));
+            // Roubo de vida: quem bateu recupera uma fração do que o alvo
+            // perdeu. O da habilidade e o da passiva se somam.
+            const drain = (effect.drain ?? 0) + modifiers.lifesteal;
+
+            if (drain > 0 && lost > 0) {
+                const healed = Math.min(actor.stats.maxHp - actor.hp, Math.round(lost * drain));
 
                 if (healed > 0) {
                     actor.hp += healed;
                     events.push({ type: 'heal', sourceId: actor.id, targetId: actor.id, amount: healed, hp: actor.hp });
                 }
+            }
+
+            // Passiva de energia: o acerto crítico devolve energia ao time.
+            if (critical && modifiers.energyOnCrit > 0) {
+                gainEnergy(state, actor, modifiers.energyOnCrit, events);
             }
 
             if (!isAlive(target)) {
@@ -530,7 +662,7 @@ function applyEffect(
             const status: StatusEffect = {
                 kind: effect.status,
                 turns: effect.turns,
-                value: calculateStatusValue(getEffectiveStats(actor), effect),
+                value: withStatusPower(actor, effect.status, calculateStatusValue(getEffectiveStats(actor), effect)),
                 sourceId: actor.id,
                 appliedOnStep: state.step,
             };
@@ -549,6 +681,91 @@ function applyEffect(
             pushStatusesChanged(target, events);
 
             return;
+        }
+    }
+}
+
+/** Avisa que a passiva agiu. Uma passiva de golpe avisa uma vez por ação, mesmo acertando vários alvos. */
+function announcePassive(unit: BattleUnit, passive: PassiveDefinition, targetIds: string[], events: BattleEvent[]): void {
+    const already = events.some((event) => event.type === 'passive_triggered' && event.unitId === unit.id && event.passiveId === passive.id);
+
+    if (!already) {
+        events.push({ type: 'passive_triggered', unitId: unit.id, passiveId: passive.id, targetIds });
+    }
+}
+
+/** O valor de um status aplicado por `actor`, com o aumento que as passivas dele dão a esse tipo de status. */
+function withStatusPower(actor: BattleUnit, kind: StatusKind, value: number): number {
+    let factor = 1;
+
+    for (const { effect } of getPassives(actor)) {
+        if (effect.type === 'status_power' && effect.statuses.includes(kind)) {
+            factor += effect.amount;
+        }
+    }
+
+    return factor === 1 ? value : Math.round(value * factor);
+}
+
+/**
+ * O time de `unit` recupera energia no meio do turno, até o máximo do jogo.
+ * Pode passar da energia com que o turno começou; no turno seguinte ela volta
+ * ao valor normal, como sempre.
+ */
+function gainEnergy(state: BattleState, unit: BattleUnit, amount: number, events: BattleEvent[]): void {
+    const gained = Math.min(amount, MAX_ENERGY - state.energy[unit.team]);
+
+    if (gained <= 0) {
+        return;
+    }
+
+    state.energy[unit.team] += gained;
+
+    for (const passive of getPassives(unit)) {
+        if (passive.effect.type === 'energy_on_crit') {
+            announcePassive(unit, passive, [], events);
+        }
+    }
+
+    events.push({ type: 'energy_gained', team: unit.team, unitId: unit.id, amount: gained, energy: state.energy[unit.team] });
+}
+
+/**
+ * As passivas de começo de vez de `unit`: aplicam os efeitos delas no alvo
+ * indicado, como uma habilidade sem custo que ninguém escolheu.
+ *
+ * - all-allies: os aliados vivos. Se a passiva só cura, quem está com a vida
+ *   cheia fica de fora (e, se ninguém precisa, ela nem é anunciada).
+ * - fastest-enemy: o inimigo vivo mais veloz agora.
+ */
+function applyTurnStartPassives(state: BattleState, unit: BattleUnit, events: BattleEvent[]): void {
+    for (const passive of getPassives(unit)) {
+        const { effect } = passive;
+
+        if (effect.type !== 'turn_start' || !isAlive(unit)) {
+            continue;
+        }
+
+        let targets: BattleUnit[];
+
+        if (effect.target === 'all-allies') {
+            const onlyHeals = effect.effects.every((item) => item.type === 'heal');
+
+            targets = state.units.filter((ally) => ally.team === unit.team && isAlive(ally) && (!onlyHeals || ally.hp < ally.stats.maxHp));
+        } else {
+            targets = sortBySpeed(state, state.units.filter((enemy) => enemy.team !== unit.team && isAlive(enemy))).slice(0, 1);
+        }
+
+        if (targets.length === 0) {
+            continue;
+        }
+
+        events.push({ type: 'passive_triggered', unitId: unit.id, passiveId: passive.id, targetIds: targets.map((target) => target.id) });
+
+        for (const item of effect.effects) {
+            for (const target of item.type === 'status' && item.to === 'self' ? [unit] : targets) {
+                applyEffect(state, unit, target, item, events);
+            }
         }
     }
 }
@@ -732,6 +949,20 @@ function activateNext(state: BattleState, events: BattleEvent[]): void {
             endActivation(state, unit, events);
             continue;
         }
+
+        // A unidade vai agir: antes, a passiva de começo de vez dela.
+        applyTurnStartPassives(state, unit, events);
+
+        // A passiva pode ter derrubado o último inimigo...
+        const winner = findWinner(state);
+
+        if (winner) {
+            finishBattle(state, winner, events);
+            return;
+        }
+
+        // ...ou mudado a velocidade de quem ainda não agiu neste turno.
+        reorderWaiting(state, events);
 
         return;
     }

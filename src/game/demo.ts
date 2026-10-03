@@ -70,6 +70,14 @@ function describe(state: BattleState, event: BattleEvent): string | null {
         case 'unit_skipped':
             return `  ${label(event.unitId)} está atordoado e perde a vez`;
 
+        case 'passive_triggered': {
+            const passive = getUnit(state, event.unitId).passives?.find((p) => p.id === event.passiveId);
+            return `  passiva de ${label(event.unitId)}: ${passive?.name ?? event.passiveId}`;
+        }
+
+        case 'energy_gained':
+            return `    o time ${event.team} recupera ${event.amount} de energia (agora tem ${event.energy})`;
+
         case 'surrendered':
             return `\nO time ${event.team} desistiu.`;
 

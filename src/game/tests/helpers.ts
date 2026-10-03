@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { GameRuleError } from '../errors';
 import type { GameRuleErrorCode } from '../errors';
 import { applyAction } from '../engine';
-import type { BattleEvent, BattleResult, BattleState, CharacterDefinition, SkillDefinition, Stats } from '../types';
+import type { BattleEvent, BattleResult, BattleState, CharacterDefinition, PassiveDefinition, SkillDefinition, Stats } from '../types';
 
 const BASE_STATS: Stats = { maxHp: 1000, atk: 100, def: 100, speed: 100, critChance: 0, critDamage: 2 };
 
@@ -17,11 +17,12 @@ export function basicAttack(ownerId: string): SkillDefinition {
     };
 }
 
-/** Personagem de teste: ataque básico + as habilidades extras informadas. */
+/** Personagem de teste: ataque básico + as habilidades extras informadas. Sem passiva, a não ser que o teste dê uma. */
 export function makeCharacter(
     id: string,
     stats: Partial<Stats> = {},
     extraSkills: SkillDefinition[] = [],
+    passives: PassiveDefinition[] = [],
 ): CharacterDefinition {
     return {
         id,
@@ -29,6 +30,7 @@ export function makeCharacter(
         role: 'fighter',
         stats: { ...BASE_STATS, ...stats },
         skills: [basicAttack(id), ...extraSkills],
+        passives,
     };
 }
 

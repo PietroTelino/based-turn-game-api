@@ -48,12 +48,13 @@ A **energia** segue o turno: quando um turno começa, os dois times recebem a en
 | Energia | Compartilhada pelo time e reabastecida a cada turno: 3 no turno 1, mais 1 por turno, até 10. O que sobra não acumula. | `constants.ts`, `getTurnEnergy` |
 | Habilidades | A primeira é o ataque básico (custo 0). As outras gastam energia. | `data/characters.ts` |
 | Dano | `ATK x poder x 100 / (100 + DEF)`, vezes o multiplicador de crítico. | `calculateDamage` |
-| Dano base | `ATK x poder` (com a fúria), sem a defesa do alvo e sem crítico. É o número mostrado na descrição da habilidade durante a batalha, junto com a cura base. | `calculateBaseDamage`, `previewSkill` |
+| Dano base | `ATK x poder` (com a fúria e as passivas que valem em todo golpe), sem a defesa do alvo, sem crítico e sem as passivas que dependem do alvo. É o número mostrado na descrição da habilidade durante a batalha, junto com a cura base. | `calculateBaseDamage`, `previewSkill` |
 | Cura | `ATK x poder`, sem passar da vida máxima. | `calculateHeal` |
 | Roubo de vida | Um efeito de dano com `drain` cura quem bateu numa fração da vida que o alvo perdeu (o que o escudo segurou não conta). Ex.: `{ type: 'damage', power: 1.5, drain: 0.5 }`. | `applyEffect` |
 | Golpes seguidos | Uma habilidade com vários efeitos de dano acerta várias vezes; cada golpe tem seu próprio crítico e eles param quando o alvo cai. | `data/characters.ts` |
 | Fúria | Depois do turno 8 o dano das habilidades cresce 50% por turno (turno 9: +50%, turno 10: +100%...), para toda batalha ter fim. Queimadura e veneno não aumentam. Na tela aparece como "Berserk +50%". | `constants.ts`, `getFuryBonus` |
 | Status | Efeitos que ficam na unidade por alguns turnos. Veja a seção abaixo. | `applyEffect`, `activateNext`, `endActivation` |
+| Passivas | Todo personagem tem pelo menos uma. Ninguém as usa: valem sozinhas. Veja a seção "Passivas". | `data/characters.ts`, `getHitModifiers`, `applyTurnStartPassives` |
 | Vitória | Vence quem derrotar todas as unidades do outro time. | `findWinner` |
 | Desistência | Um time pode desistir a qualquer momento; o outro vence na hora. | `surrender` |
 
@@ -83,9 +84,49 @@ Regras de duração:
 - `chance` (0 a 1) é a chance de o status pegar. Sem ela, sempre pega.
 - `to: 'self'` aplica em quem usou a habilidade, mesmo que ela mire em inimigos.
 
-O ciclo de uma vez fica assim: queimadura e veneno causam dano, a unidade atordoada perde a vez, a unidade age, os status dela gastam um turno.
+O ciclo de uma vez fica assim: queimadura e veneno causam dano, a unidade atordoada perde a vez, a passiva de começo de vez age, a unidade age, os status dela gastam um turno.
 
 Para a tela, o motor emite `turn_started` (turno novo, com a ordem, a energia e quanto a fúria vale), `order_changed` (a ordem mudou no meio do turno), `unit_activated` (chegou a vez de alguém), `status_applied`, `status_damage`, `status_expired` e `unit_skipped` (para animar) e `statuses_changed`, que traz a lista completa de status da unidade depois de qualquer mudança. A tela só copia essa lista.
+
+## Passivas
+
+Cada personagem tem uma lista `passives` em `data/characters.ts`. Uma passiva
+não aparece entre as jogadas: o motor a aplica sozinho, e a descrição dela é
+mostrada na carta e no painel da batalha. O campo `effect` diz o que ela faz:
+
+| `effect.type` | O que faz | Quem usa |
+| --- | --- | --- |
+| `damage_bonus` | Os golpes causam mais dano (`amount`: 0.3 = +30%). Com `when`, só contra o alvo que está na condição. | Piromante, Criomante, Banshee, Arqueiro |
+| `crit_chance_bonus` | Soma à chance de crítico. Também aceita `when`. | Ladino |
+| `ignore_defense` | Os golpes ignoram uma fração da defesa do alvo. | Espadachim |
+| `atk_from_def` | Os golpes somam ao ataque uma fração da defesa de quem bate. Cura e status não mudam. | Cavaleiro |
+| `lifesteal` | Todo golpe devolve como vida uma fração do dano que o alvo perdeu. Soma com o `drain` da habilidade. | Vampiro |
+| `energy_on_crit` | Um acerto crítico devolve energia ao time, até o máximo de 10 (pode passar da energia do turno). | Bárbaro |
+| `status_power` | Os status dos tipos listados que a unidade aplica valem mais (`amount`: 0.6 = +60%). | Guardião |
+| `turn_start` | Age sozinha no começo da vez da unidade, se ela não estiver atordoada: aplica `effects` em `target`, como uma habilidade sem custo. `all-allies` (se só cura, pula quem está com a vida cheia) ou `fastest-enemy`. | Clérigo, Dríade |
+
+Condições (`when`), sempre sobre o alvo do golpe: `target_has_status` (tem
+pelo menos um dos status), `target_hp_below` e `target_hp_above` (fração da
+vida máxima).
+
+As passivas do Clérigo e da Dríade eram habilidades ativas de 3 de energia
+(Luz Restauradora e Raízes Enredantes). Viraram versões mais fracas que
+acontecem a cada vez, sem custo.
+
+Para a tela, o motor emite `passive_triggered` quando uma passiva faz
+diferença: antes do dano que uma passiva com condição mudou (uma vez por
+ação) e antes dos efeitos de uma passiva de começo de vez. As que valem em
+todo golpe não avisam. `energy_gained` avisa que a energia de um time subiu
+no meio do turno.
+
+A sequência de números aleatórios não depende das passivas: cada golpe gasta
+um sorteio de crítico, com ou sem bônus. Uma batalha gravada antes de as
+passivas existirem (unidades sem o campo `passives`) continua como estava,
+sem passiva para ninguém.
+
+Para criar um tipo novo de passiva: acrescente-o em `PassiveEffect`
+(`types.ts`), trate-o em `getHitModifiers` (ou no ponto do motor em que ele
+age) e escreva um teste em `tests/passives.test.ts`.
 
 ## Elemento das habilidades
 
@@ -97,7 +138,7 @@ Cada habilidade do catálogo tem um `element` (`physical`, `fire`, `ice`, `light
 | --- | --- |
 | `types.ts` | Os formatos dos dados: estado, unidade, habilidade, ação, eventos. |
 | `engine.ts` | As regras: `createBattle`, `applyAction` e as consultas. |
-| `data/characters.ts` | Os personagens e suas habilidades. |
+| `data/characters.ts` | Os personagens, suas habilidades e suas passivas. |
 | `constants.ts` | Os números de balanceamento globais. |
 | `rng.ts` | Sorteio com semente, para a batalha ser reproduzível. |
 | `ai.ts` | Uma IA simples que escolhe a ação da unidade da vez (`chooseAction`) e a IA de treino do tutorial, que joga fraco de propósito (`chooseTrainingAction`). |
@@ -118,7 +159,9 @@ npm run battle:balance    # relatório de balanceamento
 
 Acrescente um objeto em `data/characters.ts`. A primeira habilidade precisa ser
 o ataque básico (custo 0, alvo `single-enemy`). Os efeitos de uma habilidade
-acontecem na ordem em que estão escritos. Depois rode `npm test` e
+acontecem na ordem em que estão escritos. Todo personagem precisa de pelo
+menos uma passiva, e a descrição dela tem que dizer os mesmos números do
+`effect` (há um teste que confere). Depois rode `npm test` e
 `npm run battle:balance` para ver se ele ficou forte ou fraco demais.
 
 A arte fica no front, em `src/assets/characters/`, com o `id` do personagem

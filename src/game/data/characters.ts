@@ -16,7 +16,12 @@ import type { CharacterDefinition } from '../types';
  *   do dano que o alvo perdeu;
  * - nos efeitos de status, `power` é o valor do status: ATK x power para
  *   queimadura, veneno e escudo; a fração do atributo para bônus e
- *   penalidades (0.3 = 30%); 0 para atordoamento.
+ *   penalidades (0.3 = 30%); 0 para atordoamento;
+ * - todo personagem tem pelo menos uma passiva (`passives`), que ninguém usa:
+ *   vale sozinha. A maioria deixa as habilidades do próprio personagem mais
+ *   fortes; as de começo de vez (`turn_start`) agem por conta própria. Os
+ *   tipos estão em PassiveEffect (types.ts), e a descrição precisa dizer os
+ *   mesmos números que estão em `effect`.
  */
 export const CHARACTERS: CharacterDefinition[] = [
     {
@@ -63,6 +68,15 @@ export const CHARACTERS: CharacterDefinition[] = [
                 ],
             },
         ],
+        passives: [
+            {
+                id: 'piromante.combustao',
+                name: 'Combustão',
+                description: 'Os golpes do Piromante causam 40% a mais de dano em inimigos que estão queimando ou com a defesa reduzida.',
+                element: 'fire',
+                effect: { type: 'damage_bonus', amount: 0.4, when: { type: 'target_has_status', statuses: ['burn', 'def_down'] } },
+            },
+        ],
     },
     {
         id: 'cavaleiro',
@@ -103,6 +117,15 @@ export const CHARACTERS: CharacterDefinition[] = [
                     { type: 'damage', power: 0.9 },
                     { type: 'status', status: 'atk_down', turns: 2, power: 0.2 },
                 ],
+            },
+        ],
+        passives: [
+            {
+                id: 'cavaleiro.peso-da-armadura',
+                name: 'Peso da Armadura',
+                description: 'Os golpes do Cavaleiro somam ao ataque 30% da defesa dele.',
+                element: 'physical',
+                effect: { type: 'atk_from_def', amount: 0.3 },
             },
         ],
     },
@@ -147,16 +170,16 @@ export const CHARACTERS: CharacterDefinition[] = [
                     { type: 'status', status: 'atk_up', turns: 2, power: 0.2 },
                 ],
             },
+        ],
+        passives: [
+            // Era a habilidade Luz Restauradora (cura em área, 3 de energia): virou
+            // uma cura menor que acontece sozinha a cada vez do Clérigo.
             {
-                id: 'clerigo.luz-restauradora',
-                name: 'Luz Restauradora',
-                description: 'Recupera a vida de todos os aliados.',
-                energyCost: 3,
-                target: 'all-allies',
+                id: 'clerigo.aura-restauradora',
+                name: 'Aura Restauradora',
+                description: 'No começo da vez do Clérigo, todos os aliados feridos recuperam vida igual a 20% do ataque dele.',
                 element: 'light',
-                effects: [
-                    { type: 'heal', power: 1.1 },
-                ],
+                effect: { type: 'turn_start', target: 'all-allies', effects: [{ type: 'heal', power: 0.2 }] },
             },
         ],
     },
@@ -188,6 +211,15 @@ export const CHARACTERS: CharacterDefinition[] = [
                     { type: 'damage', power: 1.9 },
                     { type: 'status', status: 'stun', turns: 1, power: 0, chance: 0.3 },
                 ],
+            },
+        ],
+        passives: [
+            {
+                id: 'barbaro.sede-de-batalha',
+                name: 'Sede de Batalha',
+                description: 'Quando o Bárbaro acerta um golpe crítico, o time recupera 2 de energia.',
+                element: 'lightning',
+                effect: { type: 'energy_on_crit', amount: 2 },
             },
         ],
     },
@@ -235,6 +267,15 @@ export const CHARACTERS: CharacterDefinition[] = [
                 ],
             },
         ],
+        passives: [
+            {
+                id: 'criomante.frio-cortante',
+                name: 'Frio Cortante',
+                description: 'Os golpes da Criomante causam 40% a mais de dano em inimigos lentos ou atordoados.',
+                element: 'ice',
+                effect: { type: 'damage_bonus', amount: 0.4, when: { type: 'target_has_status', statuses: ['speed_down', 'stun'] } },
+            },
+        ],
     },
     {
         id: 'guardiao',
@@ -277,6 +318,15 @@ export const CHARACTERS: CharacterDefinition[] = [
                     { type: 'heal', power: 1.4 },
                     { type: 'status', status: 'def_up', turns: 2, power: 0.3 },
                 ],
+            },
+        ],
+        passives: [
+            {
+                id: 'guardiao.toxina-potente',
+                name: 'Toxina Potente',
+                description: 'O veneno que o Guardião aplica causa 60% a mais de dano por turno.',
+                element: 'nature',
+                effect: { type: 'status_power', statuses: ['poison'], amount: 0.6 },
             },
         ],
     },
@@ -324,6 +374,15 @@ export const CHARACTERS: CharacterDefinition[] = [
                 ],
             },
         ],
+        passives: [
+            {
+                id: 'banshee.pressagio',
+                name: 'Presságio',
+                description: 'Os golpes da Banshee causam 35% a mais de dano em inimigos com menos de 40% da vida.',
+                element: 'shadow',
+                effect: { type: 'damage_bonus', amount: 0.35, when: { type: 'target_hp_below', ratio: 0.4 } },
+            },
+        ],
     },
     {
         id: 'vampiro',
@@ -365,6 +424,15 @@ export const CHARACTERS: CharacterDefinition[] = [
                 ],
             },
         ],
+        passives: [
+            {
+                id: 'vampiro.sede-de-sangue',
+                name: 'Sede de Sangue',
+                description: 'Todo golpe do Vampiro devolve a ele 30% do dano causado como vida, somando com o roubo de vida das habilidades.',
+                element: 'shadow',
+                effect: { type: 'lifesteal', amount: 0.3 },
+            },
+        ],
     },
     {
         id: 'driade',
@@ -397,20 +465,6 @@ export const CHARACTERS: CharacterDefinition[] = [
                 ],
             },
             {
-                id: 'driade.raizes-enredantes',
-                name: 'Raízes Enredantes',
-                description: 'Prende um inimigo em raízes: causa dano e reduz a velocidade e o ataque dele por 2 turnos.',
-                energyCost: 3,
-                target: 'single-enemy',
-                element: 'nature',
-                ranged: true,
-                effects: [
-                    { type: 'damage', power: 1.0 },
-                    { type: 'status', status: 'speed_down', turns: 2, power: 0.4 },
-                    { type: 'status', status: 'atk_down', turns: 2, power: 0.2 },
-                ],
-            },
-            {
                 id: 'driade.florescer',
                 name: 'Florescer',
                 description: 'Recupera a vida de todos os aliados e aumenta a defesa deles por 2 turnos.',
@@ -421,6 +475,26 @@ export const CHARACTERS: CharacterDefinition[] = [
                     { type: 'heal', power: 0.8 },
                     { type: 'status', status: 'def_up', turns: 2, power: 0.2 },
                 ],
+            },
+        ],
+        passives: [
+            // Era uma habilidade de 3 de energia (dano, lentidão e ataque menor num
+            // alvo escolhido): virou um golpe mais fraco que acontece sozinho a
+            // cada vez da Dríade, sempre no inimigo mais veloz.
+            {
+                id: 'driade.raizes-enredantes',
+                name: 'Raízes Enredantes',
+                description: 'No começo da vez da Dríade, raízes prendem o inimigo mais veloz: causam dano (30% do ataque dela) e reduzem a velocidade dele em 20% por 1 turno.',
+                element: 'nature',
+                ranged: true,
+                effect: {
+                    type: 'turn_start',
+                    target: 'fastest-enemy',
+                    effects: [
+                        { type: 'damage', power: 0.3 },
+                        { type: 'status', status: 'speed_down', turns: 1, power: 0.2 },
+                    ],
+                },
             },
         ],
     },
@@ -463,6 +537,15 @@ export const CHARACTERS: CharacterDefinition[] = [
                 effects: [
                     { type: 'damage', power: 2.3 },
                 ],
+            },
+        ],
+        passives: [
+            {
+                id: 'ladino.ponto-fraco',
+                name: 'Ponto Fraco',
+                description: 'O Ladino tem 25% a mais de chance de crítico contra inimigos com algum efeito negativo.',
+                element: 'physical',
+                effect: { type: 'crit_chance_bonus', amount: 0.25, when: { type: 'target_has_status', statuses: ['burn', 'poison', 'stun', 'atk_down', 'def_down', 'speed_down'] } },
             },
         ],
     },
@@ -509,6 +592,15 @@ export const CHARACTERS: CharacterDefinition[] = [
                 ],
             },
         ],
+        passives: [
+            {
+                id: 'espadachim.fio-da-lamina',
+                name: 'Fio da Lâmina',
+                description: 'Os golpes do Espadachim ignoram 60% da defesa do alvo.',
+                element: 'physical',
+                effect: { type: 'ignore_defense', amount: 0.6 },
+            },
+        ],
     },
     {
         id: 'arqueiro',
@@ -552,6 +644,15 @@ export const CHARACTERS: CharacterDefinition[] = [
                 effects: [
                     { type: 'damage', power: 0.9 },
                 ],
+            },
+        ],
+        passives: [
+            {
+                id: 'arqueiro.olho-de-aguia',
+                name: 'Olho de Águia',
+                description: 'Os golpes do Arqueiro causam 25% a mais de dano em inimigos com mais de 70% da vida.',
+                element: 'physical',
+                effect: { type: 'damage_bonus', amount: 0.25, when: { type: 'target_hp_above', ratio: 0.7 } },
             },
         ],
     },

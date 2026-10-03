@@ -22,6 +22,56 @@ describe('catálogo de personagens', () => {
         }
     });
 
+    it('todo personagem tem pelo menos uma passiva, com id próprio, nome e descrição', () => {
+        const passiveIds = CHARACTERS.flatMap((c) => c.passives.map((p) => p.id));
+        const skillIds = CHARACTERS.flatMap((c) => c.skills.map((s) => s.id));
+
+        assert.equal(new Set([...passiveIds, ...skillIds]).size, passiveIds.length + skillIds.length);
+
+        for (const character of CHARACTERS) {
+            assert.ok(character.passives.length >= 1, character.id);
+
+            for (const passive of character.passives) {
+                assert.ok(passive.id.startsWith(`${character.id}.`), passive.id);
+                assert.ok(passive.name && passive.description && passive.element, passive.id);
+            }
+        }
+    });
+
+    it('a descrição de cada passiva diz os mesmos números que o efeito dela', () => {
+        const percent = (fraction: number) => `${Math.round(fraction * 100)}%`;
+
+        for (const { id, description, effect } of CHARACTERS.flatMap((c) => c.passives)) {
+            // Os números que precisam aparecer no texto, conforme o tipo da passiva.
+            const numbers: string[] = [];
+
+            if (effect.type === 'energy_on_crit') {
+                numbers.push(`${effect.amount} de energia`);
+            } else if (effect.type === 'turn_start') {
+                for (const item of effect.effects) {
+                    numbers.push(percent(item.power));
+                    if (item.type === 'status') numbers.push(`${item.turns} turno`);
+                }
+            } else {
+                numbers.push(percent(effect.amount));
+
+                if ('when' in effect && effect.when && effect.when.type !== 'target_has_status') {
+                    numbers.push(percent(effect.when.ratio));
+                }
+            }
+
+            for (const number of numbers) {
+                assert.ok(description.includes(number), `${id}: a descrição deveria dizer "${number}"`);
+            }
+        }
+    });
+
+    it('ninguém tem mais de três habilidades ativas: a quarta virou passiva', () => {
+        for (const character of CHARACTERS) {
+            assert.ok(character.skills.length <= 3, character.id);
+        }
+    });
+
     it('toda habilidade tem elemento, e só golpe em inimigos é à distância', () => {
         for (const skill of CHARACTERS.flatMap((c) => c.skills)) {
             assert.ok(skill.element, skill.id);
@@ -49,7 +99,7 @@ describe('IA', () => {
 
     it('prefere a cura em área quando vários aliados estão feridos', () => {
         const { state } = createBattle({
-            teamA: [getCharacter('clerigo'), getCharacter('cavaleiro'), getCharacter('guardiao')],
+            teamA: [getCharacter('driade'), getCharacter('cavaleiro'), getCharacter('guardiao')],
             teamB: [getCharacter('cavaleiro')],
             seed: 1,
         });
@@ -59,7 +109,7 @@ describe('IA', () => {
         getUnit(state, 'A2').hp = 100;
         getUnit(state, 'A3').hp = 100;
 
-        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'clerigo.luz-restauradora' });
+        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'driade.florescer' });
     });
 
     it('usa suporte em quem ainda não tem o efeito e não repete à toa', () => {

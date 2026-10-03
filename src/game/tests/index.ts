@@ -5,4 +5,5 @@
  */
 import './engine.test';
 import './statuses.test';
+import './passives.test';
 import './ai.test';
