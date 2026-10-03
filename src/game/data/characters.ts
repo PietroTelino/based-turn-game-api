@@ -54,7 +54,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'piromante.chuva-de-meteoros',
                 name: 'Chuva de Meteoros',
                 description: 'Atinge todos os inimigos e reduz a defesa deles por 2 turnos.',
-                energyCost: 4,
+                energyCost: 3,
                 target: 'all-enemies',
                 element: 'fire',
                 effects: [
@@ -151,7 +151,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'clerigo.luz-restauradora',
                 name: 'Luz Restauradora',
                 description: 'Recupera a vida de todos os aliados.',
-                energyCost: 4,
+                energyCost: 3,
                 target: 'all-allies',
                 element: 'light',
                 effects: [
@@ -225,7 +225,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'criomante.prisao-de-gelo',
                 name: 'Prisão de Gelo',
                 description: 'Congela um inimigo: causa dano e o faz perder a próxima vez.',
-                energyCost: 4,
+                energyCost: 3,
                 target: 'single-enemy',
                 element: 'ice',
                 ranged: true,
@@ -315,7 +315,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'banshee.grito-aterrador',
                 name: 'Grito Aterrador',
                 description: 'Atinge todos os inimigos, com 35% de chance de atordoar cada um.',
-                energyCost: 4,
+                energyCost: 3,
                 target: 'all-enemies',
                 element: 'shadow',
                 effects: [
@@ -357,7 +357,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'vampiro.banquete-de-sangue',
                 name: 'Banquete de Sangue',
                 description: 'Atinge todos os inimigos e recupera vida igual a 30% do dano causado.',
-                energyCost: 4,
+                energyCost: 3,
                 target: 'all-enemies',
                 element: 'shadow',
                 effects: [
@@ -414,7 +414,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'driade.florescer',
                 name: 'Florescer',
                 description: 'Recupera a vida de todos os aliados e aumenta a defesa deles por 2 turnos.',
-                energyCost: 4,
+                energyCost: 3,
                 target: 'all-allies',
                 element: 'nature',
                 effects: [
@@ -457,7 +457,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'ladino.golpe-fatal',
                 name: 'Golpe Fatal',
                 description: 'Um golpe certeiro que causa dano muito alto a um inimigo.',
-                energyCost: 4,
+                energyCost: 3,
                 target: 'single-enemy',
                 element: 'physical',
                 effects: [
@@ -545,7 +545,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'arqueiro.chuva-de-flechas',
                 name: 'Chuva de Flechas',
                 description: 'Dispara uma saraivada que atinge todos os inimigos.',
-                energyCost: 4,
+                energyCost: 3,
                 target: 'all-enemies',
                 element: 'physical',
                 ranged: true,

@@ -55,8 +55,6 @@ describe('IA', () => {
         });
 
         assert.equal(state.activeUnitId, 'A1');
-        // A cura em área custa 4: a energia do turno 1 (3) não paga, a do turno 2 sim.
-        state.energy.A = 4;
         getUnit(state, 'A1').hp = 100;
         getUnit(state, 'A2').hp = 100;
         getUnit(state, 'A3').hp = 100;
