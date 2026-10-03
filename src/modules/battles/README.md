@@ -3,21 +3,29 @@
 Liga o motor (`src/game`) ao banco e ao HTTP. Todas as rotas exigem login
 (`Authorization: Bearer <accessToken>`).
 
-O jogador é sempre o time **A**; a IA é o time **B**.
+Existem dois tipos de batalha, e as rotas são as mesmas para os dois:
+
+- **Contra a IA** (`mode: "ai"`): o jogador é o time **A** e a IA é o time **B**.
+  Nasce em `POST /api/battles`.
+- **Entre dois jogadores** (`mode: "pvp"`): quem criou a sala é o time **A** e
+  quem entrou é o time **B**. Nasce no módulo de salas (`src/modules/rooms`),
+  quando os dois avisam que estão prontos. Não há rota para criar uma direto.
+
+Em toda resposta, `playerTeam` diz de que lado está quem fez a requisição.
 
 ## Antes de usar
 
-O model `Battle` foi acrescentado ao `prisma/schema.prisma`. Crie a tabela e
-atualize o client gerado:
+Os models `Battle` e `Room` ficam em `prisma/schema.prisma`. Depois de qualquer
+mudança neles, crie a migração e atualize o client gerado:
 
 ```bash
-npx prisma migrate dev --name add_battles
+npx prisma migrate dev --name multiplayer
 npx prisma generate
 ```
 
-Até isso ser feito, `npm run build` acusa erro em `battle.repository.ts`
-(o client gerado ainda não conhece `prisma.battle`) e as rotas de batalha
-respondem 500. O resto da API não é afetado.
+Até isso ser feito, `npm run build` acusa erro em `battle.repository.ts` e em
+`room.repository.ts` (o client gerado ainda não conhece os campos novos) e as
+rotas de batalha e de sala respondem 500. O resto da API não é afetado.
 
 ## Rotas
 
@@ -25,10 +33,11 @@ respondem 500. O resto da API não é afetado.
 | --- | --- | --- |
 | GET | `/api/battles/characters` | Catálogo de personagens e habilidades. |
 | POST | `/api/battles` | Cria uma batalha contra a IA. |
-| GET | `/api/battles` | Lista as últimas 20 batalhas do jogador (sem o estado). |
+| GET | `/api/battles` | Lista as últimas 20 batalhas do jogador, de qualquer um dos lados (sem o estado). |
 | GET | `/api/battles/:id` | Estado atual de uma batalha. |
+| GET | `/api/battles/:id/events?after=N` | O que aconteceu depois do evento `N`. Só tem conteúdo em batalha entre jogadores. |
 | POST | `/api/battles/:id/actions` | Envia a jogada da unidade da vez. |
-| POST | `/api/battles/:id/surrender` | Desiste: a batalha termina como derrota do jogador. |
+| POST | `/api/battles/:id/surrender` | Desiste: a batalha termina como derrota de quem desistiu. |
 
 ### Criar
 
@@ -59,9 +68,10 @@ POST /api/battles/:id/surrender
 ```
 
 Sem corpo. Pode ser chamada a qualquer momento enquanto a batalha está em
-andamento. A batalha fica `finished`, com `winner: "B"` e
-`state.surrenderedBy: "A"`, e os eventos são `surrendered` e `battle_ended`.
-Em batalha já terminada responde 409 (`BATTLE_OVER`).
+andamento, mesmo fora da própria vez. A batalha fica `finished`, o outro lado
+vence e `state.surrenderedBy` guarda o time de quem desistiu; os eventos são
+`surrendered` e `battle_ended`. Em batalha já terminada responde 409
+(`BATTLE_OVER`).
 
 ### Resposta de criar, de jogar e de desistir
 
@@ -71,6 +81,7 @@ Em batalha já terminada responde 409 (`BATTLE_OVER`).
         "id": "...",
         "status": "in_progress",
         "winner": null,
+        "mode": "ai",
         "playerTeam": "A",
         "state": {
             "units": [],
@@ -83,7 +94,8 @@ Em batalha já terminada responde 409 (`BATTLE_OVER`).
             "step": 5,
             "winner": null
         },
-        "availableActions": []
+        "availableActions": [],
+        "cursor": 0
     },
     "events": []
 }
@@ -95,9 +107,37 @@ Em batalha já terminada responde 409 (`BATTLE_OVER`).
   ser usada agora e em quem.
 - Cada item de `availableActions` traz também `preview: { damage, heal }`: o dano base e a cura base da habilidade para quem está na vez agora (ATK atual x poder, com a fúria, sem a defesa do alvo e sem crítico). `null` quando a habilidade não causa dano ou não cura. É o número que a tela mostra junto da descrição.
 
-Depois da jogada do jogador a IA joga sozinha até a vez voltar para ele, então
-uma única resposta pode trazer várias jogadas (e até a virada de turno) em
-`events`. Quando a resposta chega, ou é a vez do jogador ou a batalha acabou.
+Contra a IA, depois da jogada do jogador a IA joga sozinha até a vez voltar
+para ele, então uma única resposta pode trazer várias jogadas (e até a virada
+de turno) em `events`. Quando a resposta chega, ou é a vez do jogador ou a
+batalha acabou.
+
+### Batalha entre dois jogadores
+
+Ninguém joga pelo outro: a resposta de uma jogada traz só o que ela causou, e a
+vez pode ter passado para o adversário. Enquanto não é a vez de quem pediu,
+`availableActions` vem vazio e jogar com a unidade do outro responde 403
+(`NOT_YOUR_UNIT`).
+
+Para a tela de um jogador mostrar o que o outro fez, a batalha guarda a lista
+completa de eventos, desde a abertura, e cada resposta traz `cursor`: quantos
+eventos existiam naquele momento. Quem está esperando pergunta de tempos em
+tempos pelo que veio depois:
+
+```
+GET /api/battles/:id/events?after=12
+```
+
+```json
+{ "battle": { "cursor": 15 }, "events": ["evento 12", "evento 13", "evento 14"] }
+```
+
+`battle` é a mesma visão das outras rotas (aqui só com `cursor`, para
+encurtar) e `events` são os eventos de número `after` em diante, no mesmo
+formato das outras respostas. Se nada
+aconteceu, `events` vem vazio e `cursor` é igual a `after`. `after=0` devolve a
+batalha inteira, e é assim que a tela anima a abertura ao entrar. Em batalha
+contra a IA a lista não é guardada: `cursor` é sempre 0 e `events` vem vazio.
 
 ### Erros
 
@@ -118,7 +158,7 @@ As mensagens ficam em `locales/<idioma>/translation.json`, na seção `battle`.
 
 | Arquivo | Para que serve |
 | --- | --- |
-| `battle.service.ts` | Cria a batalha, aplica a jogada, faz a IA responder e grava. |
+| `battle.service.ts` | Cria a batalha (contra a IA ou entre jogadores), aplica a jogada, faz a IA responder e grava. |
 | `battle.repository.ts` | Leitura e gravação com o Prisma. |
 | `battle.types.ts` | Formatos das respostas e a interface `BattleStore`. |
 | `battle.controller.ts` | Valida o corpo da requisição e traduz erros em respostas HTTP. |

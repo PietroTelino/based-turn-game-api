@@ -94,5 +94,11 @@
             "TARGET_REQUIRED": "Escolha um alvo",
             "INVALID_TARGET": "Alvo inválido"
         }
+    },
+    "room": {
+        "notFound": "Sala não encontrada",
+        "full": "Essa sala já está cheia",
+        "closed": "Essa sala não está mais aberta",
+        "errorUnexpected": "Erro ao processar a sala"
     }
 }

@@ -25,7 +25,10 @@ model User {
     refreshTokens   RefreshToken[]
     auditLogs       AuditLog[]      @relation("UserAudits")
     performedAudits AuditLog[]      @relation("PerformedByAudits")
-    battles         Battle[]
+    battles         Battle[]        @relation("BattlePlayer")
+    opponentBattles Battle[]        @relation("BattleOpponent")
+    hostedRooms     Room[]          @relation("RoomHost")
+    joinedRooms     Room[]          @relation("RoomGuest")
 
     @@map("users")
 }
@@ -84,12 +87,16 @@ model AuditLog {
 
 model Battle {
     id          String    @id @default(uuid()) @db.Uuid
+    // Quem controla o time A. Contra a IA, é o único jogador.
     userId      String    @map("user_id") @db.Uuid
-    user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+    user        User      @relation("BattlePlayer", fields: [userId], references: [id], onDelete: Cascade)
+    // Quem controla o time B numa batalha entre dois jogadores. Vazio quando o time B é da IA.
+    opponentId  String?   @map("opponent_id") @db.Uuid
+    opponent    User?     @relation("BattleOpponent", fields: [opponentId], references: [id], onDelete: Cascade)
 
     // "in_progress" | "finished"
     status      String    @default("in_progress")
-    // "A" (jogador) | "B" (IA) | null enquanto a batalha não termina
+    // "A" | "B" | null enquanto a batalha não termina
     winner      String?
     // Cópia de state.turn: o turno (a rodada em que todos agem uma vez). Aparece no histórico.
     turn        Int       @default(1)
@@ -97,6 +104,9 @@ model Battle {
     step        Int       @default(0)
     // O BattleState inteiro do motor (src/game), em JSON.
     state       Json
+    // Tudo o que aconteceu na batalha, em ordem (lista de BattleEvent). Só as batalhas entre
+    // dois jogadores guardam: é por aqui que cada um acompanha as jogadas do outro.
+    events      Json?
 
     createdAt   DateTime  @default(now()) @map("created_at")
     updatedAt   DateTime  @updatedAt      @map("updated_at")
@@ -104,4 +114,36 @@ model Battle {
 
     @@map("battles")
     @@index([userId, createdAt])
+    @@index([opponentId, createdAt])
+}
+
+// Sala do multiplayer: onde dois jogadores se encontram e escolhem os times antes da batalha.
+model Room {
+    id          String    @id @default(uuid()) @db.Uuid
+    // Código curto que os jogadores passam um para o outro para entrar (ex.: "K7QF2M").
+    code        String    @unique
+    // "waiting" | "selecting" | "starting" | "started" | "closed" (ver src/modules/rooms/room.types.ts)
+    status      String    @default("waiting")
+
+    // Quem criou a sala: fica com o time A.
+    hostId      String    @map("host_id") @db.Uuid
+    host        User      @relation("RoomHost", fields: [hostId], references: [id], onDelete: Cascade)
+    // Quem entrou: fica com o time B.
+    guestId     String?   @map("guest_id") @db.Uuid
+    guest       User?     @relation("RoomGuest", fields: [guestId], references: [id], onDelete: SetNull)
+
+    // O time que cada um confirmou (lista de ids de personagens). Um não vê o do outro.
+    hostTeam    Json?     @map("host_team")
+    guestTeam   Json?     @map("guest_team")
+    hostReady   Boolean   @default(false) @map("host_ready")
+    guestReady  Boolean   @default(false) @map("guest_ready")
+
+    // A batalha criada quando os dois ficaram prontos.
+    battleId    String?   @map("battle_id") @db.Uuid
+
+    createdAt   DateTime  @default(now()) @map("created_at")
+    updatedAt   DateTime  @updatedAt      @map("updated_at")
+
+    @@map("rooms")
+    @@index([status, createdAt])
 }

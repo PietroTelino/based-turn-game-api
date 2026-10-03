@@ -4,3 +4,4 @@
  */
 import './game/tests';
 import './modules/battles/tests';
+import './modules/rooms/tests';

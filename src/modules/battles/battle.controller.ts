@@ -62,6 +62,21 @@ export class BattleController {
         }
     };
 
+    /** GET /:id/events?after=N — o que aconteceu depois dos N primeiros eventos. */
+    events = async (req: Request, res: Response) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
+            }
+
+            const after = Number(req.query.after ?? 0);
+
+            return res.json(await this.service.events(req.user.id, String(req.params.id), Number.isInteger(after) && after > 0 ? after : 0));
+        } catch (error) {
+            return this.handleError(req, res, error);
+        }
+    };
+
     act = async (req: Request, res: Response) => {
         try {
             if (!req.user) {

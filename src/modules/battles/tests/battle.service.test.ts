@@ -313,7 +313,8 @@ describe('BattleService: jogar', () => {
         const battles = await service.list(PLAYER);
 
         assert.equal(battles.length, 2);
-        assert.ok(battles.every((b) => b.userId === PLAYER && !('state' in b)));
+        assert.ok(battles.every((b) => b.mode === 'ai' && b.playerTeam === 'A'));
+        assert.ok(battles.every((b) => !('state' in b) && !('events' in b) && !('userId' in b)), 'só o resumo, sem ids de jogadores');
     });
 });
 
@@ -350,5 +351,135 @@ describe('BattleService: batalha gravada no formato antigo', () => {
         assert.equal(battle.state.turn, 4);
         assert.equal(stored?.step, battle.state.step);
         assert.ok((stored?.step ?? 0) > 5);
+    });
+});
+
+describe('BattleService: batalha entre dois jogadores', () => {
+    const HOST = PLAYER;
+    const GUEST = OTHER_PLAYER;
+    const STRANGER = 'jogador-3';
+
+    /** Bárbaro (135 de velocidade) do anfitrião contra Cavaleiro (88) do convidado: o anfitrião começa. */
+    async function versus(teamSize = 1, hostTeam = ['barbaro'], guestTeam = ['cavaleiro']) {
+        const { store, service } = setup(teamSize);
+        const id = await service.createVersus({ hostId: HOST, hostTeam, guestId: GUEST, guestTeam, seed: 1 });
+
+        return { store, service, id };
+    }
+
+    it('nasce parada na vez de quem é mais veloz, e cada jogador a enxerga do seu lado', async () => {
+        const { service, id } = await versus();
+        const host = await service.get(HOST, id);
+        const guest = await service.get(GUEST, id);
+
+        assert.deepEqual([host.mode, host.playerTeam, guest.mode, guest.playerTeam], ['pvp', 'A', 'pvp', 'B']);
+        assert.equal(host.state.activeUnitId, 'A1');
+        assert.equal(host.state.step, 1, 'ninguém jogou ainda: a IA não entra nesta batalha');
+        assert.ok(host.availableActions.length > 0, 'quem está na vez recebe as opções');
+        assert.deepEqual(guest.availableActions, [], 'quem espera não recebe opção nenhuma');
+        await rejectsWith(service.get(STRANGER, id), 'BATTLE_NOT_FOUND');
+    });
+
+    it('cada jogador só mexe nas próprias unidades, na vez delas, e ninguém joga pelo outro', async () => {
+        const { service, id } = await versus();
+
+        // Não é a vez do convidado, e a unidade do anfitrião não é dele.
+        await rejectsWithRule(service.act(GUEST, id, { unitId: 'B1', skillId: 'cavaleiro.corte', targetId: 'A1' }), 'NOT_YOUR_TURN');
+        await rejectsWith(service.act(GUEST, id, { unitId: 'A1', skillId: 'barbaro.machadada', targetId: 'B1' }), 'NOT_YOUR_UNIT');
+        await rejectsWith(service.act(STRANGER, id, { unitId: 'A1', skillId: 'barbaro.machadada', targetId: 'B1' }), 'BATTLE_NOT_FOUND');
+
+        const played = await service.act(HOST, id, { unitId: 'A1', skillId: 'barbaro.machadada', targetId: 'B1' });
+
+        assert.equal(played.events.filter((e) => e.type === 'skill_used').length, 1, 'só a jogada do anfitrião');
+        assert.equal(played.battle.state.activeUnitId, 'B1', 'a vez passou para o convidado e ficou parada nele');
+        assert.deepEqual(played.battle.availableActions, []);
+
+        // Agora é o convidado quem joga; o anfitrião não pode jogar por ele.
+        await rejectsWith(service.act(HOST, id, { unitId: 'B1', skillId: 'cavaleiro.corte', targetId: 'A1' }), 'NOT_YOUR_UNIT');
+
+        const answered = await service.act(GUEST, id, { unitId: 'B1', skillId: 'cavaleiro.corte', targetId: 'A1' });
+
+        assert.equal(answered.battle.playerTeam, 'B');
+        assert.ok(answered.events.some((e) => e.type === 'damage' && e.targetId === 'A1'));
+    });
+
+    it('o oponente acompanha as jogadas pelo histórico: pede o que veio depois do que já viu', async () => {
+        const { service, id } = await versus();
+        const opening = await service.events(GUEST, id, 0);
+
+        assert.deepEqual(opening.events.map((e) => e.type), ['turn_started', 'unit_activated']);
+        assert.equal(opening.battle.cursor, 2);
+
+        const played = await service.act(HOST, id, { unitId: 'A1', skillId: 'barbaro.machadada', targetId: 'B1' });
+        const seen = await service.events(GUEST, id, opening.battle.cursor);
+
+        assert.deepEqual(seen.events, played.events, 'o convidado recebe exatamente o que o anfitrião recebeu');
+        assert.equal(seen.battle.cursor, 2 + played.events.length);
+        assert.equal(played.battle.cursor, seen.battle.cursor, 'quem jogou já sai com o contador em dia');
+        assert.ok(seen.battle.availableActions.length > 0, 'e agora as opções são do convidado');
+
+        // Nada de novo: lista vazia, contador igual.
+        const idle = await service.events(GUEST, id, seen.battle.cursor);
+
+        assert.deepEqual([idle.events.length, idle.battle.cursor], [0, seen.battle.cursor]);
+        await rejectsWith(service.events(STRANGER, id, 0), 'BATTLE_NOT_FOUND');
+    });
+
+    it('batalha contra a IA não guarda histórico: o contador fica em zero', async () => {
+        const { service } = setup();
+        const { battle } = await service.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], seed: 1 });
+        const played = await service.act(PLAYER, battle.id, { unitId: 'A1', skillId: 'barbaro.machadada', targetId: 'B1' });
+
+        assert.deepEqual([battle.mode, battle.cursor, played.battle.cursor], ['ai', 0, 0]);
+        assert.deepEqual((await service.events(PLAYER, battle.id, 0)).events, []);
+    });
+
+    it('qualquer um dos dois pode desistir, a qualquer momento, e o outro vence', async () => {
+        const first = await versus();
+        // Não é a vez do convidado, e mesmo assim ele pode desistir.
+        const quit = await first.service.surrender(GUEST, first.id);
+
+        assert.deepEqual([quit.battle.status, quit.battle.winner, quit.battle.state.surrenderedBy], ['finished', 'A', 'B']);
+        assert.deepEqual((await first.service.events(HOST, first.id, 2)).events, quit.events, 'o anfitrião fica sabendo pelo histórico');
+        await rejectsWithRule(first.service.act(HOST, first.id, { unitId: 'A1', skillId: 'barbaro.machadada', targetId: 'B1' }), 'BATTLE_OVER');
+
+        const second = await versus();
+        const hostQuit = await second.service.surrender(HOST, second.id);
+
+        assert.deepEqual([hostQuit.battle.winner, hostQuit.battle.state.surrenderedBy], ['B', 'A']);
+    });
+
+    it('uma batalha inteira, com cada lado jogando na sua vez, chega ao fim e aparece na lista dos dois', async () => {
+        const { store, service, id } = await versus(3, ['piromante', 'cavaleiro', 'clerigo'], ['barbaro', 'criomante', 'guardiao']);
+        let view = await service.get(HOST, id);
+
+        for (let i = 0; view.status === 'in_progress'; i++) {
+            assert.ok(i < 400, 'a batalha deveria terminar');
+
+            const stored = await store.findById(id);
+
+            assert.ok(stored);
+
+            const action = chooseAction(stored.state);
+            const mover = action.unitId.startsWith('A') ? HOST : GUEST;
+
+            view = (await service.act(mover, id, action)).battle;
+        }
+
+        const [mine] = await service.list(HOST);
+        const [theirs] = await service.list(GUEST);
+
+        assert.ok(view.winner === 'A' || view.winner === 'B');
+        assert.deepEqual([mine?.id, mine?.mode, mine?.playerTeam, mine?.winner], [id, 'pvp', 'A', view.winner]);
+        assert.deepEqual([theirs?.id, theirs?.mode, theirs?.playerTeam], [id, 'pvp', 'B']);
+        assert.deepEqual(await service.list(STRANGER), []);
+    });
+
+    it('os times da sala seguem a mesma regra de tamanho das outras batalhas', async () => {
+        const service = new BattleService(new InMemoryBattleStore(), () => 0);
+
+        await rejectsWith(service.createVersus({ hostId: HOST, hostTeam: FIVE, guestId: GUEST, guestTeam: ['cavaleiro'] }), 'INVALID_TEAM');
+        assert.throws(() => service.validateTeam(['cavaleiro']), (error: unknown) => error instanceof BattleError && error.code === 'INVALID_TEAM');
+        assert.doesNotThrow(() => service.validateTeam(FIVE));
     });
 });

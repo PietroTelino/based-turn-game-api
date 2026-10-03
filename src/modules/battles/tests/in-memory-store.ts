@@ -1,14 +1,22 @@
 import { randomUUID } from 'node:crypto';
-import type { BattleState } from '../../../game';
-import type { BattleRecord, BattleSnapshot, BattleStore, BattleSummary } from '../battle.types';
+import type { BattleEvent, BattleState } from '../../../game';
+import type { BattleRecord, BattleSnapshot, BattleStore, BattleSummaryRow } from '../battle.types';
 
 /** Faz o mesmo papel do banco nos testes: guarda as batalhas num Map. */
 export class InMemoryBattleStore implements BattleStore {
     private rows = new Map<string, BattleRecord>();
 
-    async create(userId: string, snapshot: BattleSnapshot): Promise<BattleRecord> {
+    async create(userId: string, snapshot: BattleSnapshot, versus?: { opponentId: string; events: BattleEvent[] }): Promise<BattleRecord> {
         const now = new Date();
-        const record: BattleRecord = { ...copy(snapshot), id: randomUUID(), userId, createdAt: now, updatedAt: now };
+        const record: BattleRecord = {
+            ...copy(snapshot),
+            id: randomUUID(),
+            userId,
+            opponentId: versus?.opponentId ?? null,
+            events: asJson(versus?.events ?? []),
+            createdAt: now,
+            updatedAt: now,
+        };
 
         this.rows.set(record.id, record);
 
@@ -21,22 +29,27 @@ export class InMemoryBattleStore implements BattleStore {
         return record ? copy(record) : null;
     }
 
-    async findManyByUser(userId: string, limit: number): Promise<BattleSummary[]> {
+    async findManyByUser(userId: string, limit: number): Promise<BattleSummaryRow[]> {
         return [...this.rows.values()]
-            .filter((record) => record.userId === userId)
+            .filter((record) => record.userId === userId || record.opponentId === userId)
             .reverse()
             .slice(0, limit)
-            .map(({ state: _state, ...summary }) => summary);
+            .map(({ state: _state, events: _events, ...summary }) => summary);
     }
 
-    async saveIfStep(id: string, expectedStep: number, snapshot: BattleSnapshot): Promise<BattleRecord | null> {
+    async saveIfStep(id: string, expectedStep: number, snapshot: BattleSnapshot, events?: BattleEvent[]): Promise<BattleRecord | null> {
         const current = this.rows.get(id);
 
         if (!current || current.step !== expectedStep || current.status !== 'in_progress') {
             return null;
         }
 
-        const updated: BattleRecord = { ...current, ...copy(snapshot), updatedAt: new Date() };
+        const updated: BattleRecord = {
+            ...current,
+            ...copy(snapshot),
+            ...(events && { events: asJson(events) }),
+            updatedAt: new Date(),
+        };
 
         this.rows.set(id, updated);
 
@@ -44,7 +57,11 @@ export class InMemoryBattleStore implements BattleStore {
     }
 }
 
-/** Copia como o banco faria: o estado passa por JSON, igual a uma coluna Json. */
-function copy<T extends { state: BattleState }>(value: T): T {
-    return { ...value, state: JSON.parse(JSON.stringify(value.state)) as BattleState };
+function asJson<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** Copia como o banco faria: o estado e o histórico passam por JSON, igual a uma coluna Json. */
+function copy<T extends { state: BattleState; events?: BattleEvent[] }>(value: T): T {
+    return { ...value, state: asJson(value.state), ...(value.events && { events: asJson(value.events) }) };
 }

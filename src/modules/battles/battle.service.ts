@@ -20,7 +20,10 @@ import type {
     BattleView,
 } from './battle.types';
 
-/** O jogador é sempre o time A; a IA é o time B. */
+/**
+ * Contra a IA, o jogador é o time A e a IA é o time B. Entre dois jogadores,
+ * quem criou a sala é o time A e quem entrou é o time B.
+ */
 export const PLAYER_TEAM: TeamId = 'A';
 export const AI_TEAM: TeamId = 'B';
 
@@ -30,6 +33,16 @@ export const TEAM_SIZE = 5;
 const LIST_LIMIT = 20;
 const MAX_AI_ACTIONS_IN_A_ROW = 100;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Os dois lados de uma batalha entre jogadores. Quem criou a sala fica com o time A. */
+export interface CreateVersusInput {
+    hostId: string;
+    hostTeam: string[];
+    guestId: string;
+    guestTeam: string[];
+    /** Semente do motor. Só os testes usam. */
+    seed?: number;
+}
 
 export interface CreateBattleInput {
     /** Ids dos personagens do jogador: exatamente TEAM_SIZE, sem repetir. */
@@ -43,9 +56,14 @@ export interface CreateBattleInput {
 /**
  * Liga o motor (src/game) ao banco.
  *
- * O motor resolve uma ação de cada vez. Aqui está o que é próprio de uma
- * partida contra a IA: depois da jogada do jogador, a IA joga sozinha até a
- * vez voltar para ele, e só então o resultado é gravado e devolvido.
+ * O motor resolve uma ação de cada vez. Aqui está o que é próprio de cada
+ * tipo de partida:
+ *
+ * - Contra a IA: depois da jogada do jogador, a IA joga sozinha até a vez
+ *   voltar para ele, e só então o resultado é gravado e devolvido.
+ * - Entre dois jogadores: cada um só mexe nas próprias unidades, na vez
+ *   delas. O que acontece vai para o histórico da batalha (`events`), e é
+ *   por ele que o outro lado acompanha as jogadas (`events()`, mais abaixo).
  */
 export class BattleService {
     private teamSize: number;
@@ -67,8 +85,14 @@ export class BattleService {
         return CHARACTERS;
     }
 
-    list(userId: string): Promise<BattleSummary[]> {
-        return this.store.findManyByUser(userId, LIST_LIMIT);
+    async list(userId: string): Promise<BattleSummary[]> {
+        const rows = await this.store.findManyByUser(userId, LIST_LIMIT);
+
+        return rows.map(({ userId: ownerId, opponentId, ...row }) => ({
+            ...row,
+            mode: opponentId === null ? 'ai' : 'pvp',
+            playerTeam: teamOf({ userId: ownerId, opponentId }, userId) ?? PLAYER_TEAM,
+        }));
     }
 
     async create(userId: string, input: CreateBattleInput): Promise<BattleResponse> {
@@ -85,60 +109,103 @@ export class BattleService {
         const { state, events } = this.playAiActions(started);
         const record = await this.store.create(userId, toSnapshot(state));
 
-        return { battle: toView(record), events };
+        return { battle: toView(record, PLAYER_TEAM), events };
+    }
+
+    /**
+     * Cria a batalha entre dois jogadores e devolve o id dela. Quem chama é o
+     * módulo de salas, quando os dois avisam que estão prontos. Ninguém joga
+     * aqui: a batalha nasce parada na vez da primeira unidade.
+     */
+    async createVersus(input: CreateVersusInput): Promise<string> {
+        const started = createBattle({
+            teamA: this.resolveTeam(input.hostTeam),
+            teamB: this.resolveTeam(input.guestTeam),
+            ...(input.seed !== undefined && { seed: input.seed }),
+        });
+        const record = await this.store.create(input.hostId, toSnapshot(started.state), {
+            opponentId: input.guestId,
+            events: started.events,
+        });
+
+        return record.id;
+    }
+
+    /** Confere um time sem criar nada: lança INVALID_TEAM ou UNKNOWN_CHARACTER. */
+    validateTeam(ids: string[]): void {
+        this.resolveTeam(ids);
     }
 
     async get(userId: string, battleId: string): Promise<BattleView> {
-        return toView(await this.findOwned(userId, battleId));
+        const { record, team } = await this.findForPlayer(userId, battleId);
+
+        return toView(record, team);
+    }
+
+    /**
+     * O que aconteceu na batalha depois dos `after` primeiros eventos. É a
+     * consulta que a tela repete numa batalha entre dois jogadores para ver as
+     * jogadas do oponente. Contra a IA a lista vem sempre vazia.
+     */
+    async events(userId: string, battleId: string, after: number): Promise<BattleResponse> {
+        const { record, team } = await this.findForPlayer(userId, battleId);
+
+        return { battle: toView(record, team), events: record.events.slice(Math.max(0, after)) };
     }
 
     async act(userId: string, battleId: string, action: BattleAction): Promise<BattleResponse> {
-        const record = await this.findOwned(userId, battleId);
+        const { record, team } = await this.findForPlayer(userId, battleId);
         const actor = record.state.units.find((unit) => unit.id === action.unitId);
 
-        if (actor && actor.team !== PLAYER_TEAM) {
+        if (actor && actor.team !== team) {
             throw new BattleError('NOT_YOUR_UNIT', 403, 'battle.notYourUnit');
         }
 
         // applyAction valida o resto (vez, energia, alvo...) e lança GameRuleError.
-        const { state, events } = this.playAiActions(applyAction(record.state, action));
-        const saved = await this.store.saveIfStep(record.id, record.step, toSnapshot(state));
+        const played = applyAction(record.state, action);
 
-        if (!saved) {
-            throw new BattleError('BATTLE_CONFLICT', 409, 'battle.conflict');
-        }
-
-        return { battle: toView(saved), events };
+        return this.save(record, team, isVersus(record) ? played : this.playAiActions(played));
     }
 
-    /** O jogador desiste: a batalha termina agora, com vitória da IA. */
+    /** O jogador desiste: a batalha termina agora, com vitória do outro lado. */
     async surrender(userId: string, battleId: string): Promise<BattleResponse> {
-        const record = await this.findOwned(userId, battleId);
+        const { record, team } = await this.findForPlayer(userId, battleId);
 
         // surrender lança GameRuleError (BATTLE_OVER) se a batalha já acabou.
-        const { state, events } = surrender(record.state, PLAYER_TEAM);
-        const saved = await this.store.saveIfStep(record.id, record.step, toSnapshot(state));
+        return this.save(record, team, surrender(record.state, team));
+    }
+
+    /** Grava o resultado de uma jogada (ou desistência) e monta a resposta para quem jogou. */
+    private async save(record: BattleRecord, team: TeamId, result: BattleResult): Promise<BattleResponse> {
+        const saved = await this.store.saveIfStep(
+            record.id,
+            record.step,
+            toSnapshot(result.state),
+            // Entre dois jogadores, os eventos entram no histórico para o outro lado buscar.
+            isVersus(record) ? [...record.events, ...result.events] : undefined,
+        );
 
         if (!saved) {
             throw new BattleError('BATTLE_CONFLICT', 409, 'battle.conflict');
         }
 
-        return { battle: toView(saved), events };
+        return { battle: toView(saved, team), events: result.events };
     }
 
-    /** Busca a batalha e garante que ela é de quem pediu. */
-    private async findOwned(userId: string, battleId: string): Promise<BattleRecord> {
+    /** Busca a batalha, garante que quem pediu joga nela e diz de que lado. */
+    private async findForPlayer(userId: string, battleId: string): Promise<{ record: BattleRecord; team: TeamId }> {
         const record = UUID_PATTERN.test(battleId) ? await this.store.findById(battleId) : null;
+        const team = record ? teamOf(record, userId) : null;
 
-        // Batalha de outro jogador responde igual a batalha inexistente, para
-        // não revelar quais ids existem.
-        if (!record || record.userId !== userId) {
+        // Batalha de outros jogadores responde igual a batalha inexistente,
+        // para não revelar quais ids existem.
+        if (!record || !team) {
             throw new BattleError('BATTLE_NOT_FOUND', 404, 'battle.notFound');
         }
 
         // Batalha gravada no formato antigo (antes dos turnos por rodada) é
         // convertida ao ser lida; as atuais passam direto.
-        return { ...record, state: upgradeState(record.state) };
+        return { record: { ...record, state: upgradeState(record.state) }, team };
     }
 
     private resolveTeam(ids: string[]): CharacterDefinition[] {
@@ -207,19 +274,36 @@ function toSnapshot(state: BattleState): BattleSnapshot {
     };
 }
 
-function toView(record: BattleRecord): BattleView {
+/** De que lado `userId` joga: A para quem criou a batalha, B para o oponente, null se ele não está nela. */
+function teamOf(battle: { userId: string; opponentId: string | null }, userId: string): TeamId | null {
+    if (battle.userId === userId) return 'A';
+    if (battle.opponentId === userId) return 'B';
+
+    return null;
+}
+
+function isVersus(record: BattleRecord): boolean {
+    return record.opponentId !== null;
+}
+
+/** A batalha como `team` a enxerga. */
+function toView(record: BattleRecord, team: TeamId): BattleView {
     // O gerador de números aleatórios e o que ele sorteou no turno ficam só no
     // servidor: com eles o jogador poderia prever os críticos.
     const { rngState: _rngState, draws: _draws, ...state } = record.state;
+    const active = getActiveUnit(record.state);
 
     return {
         id: record.id,
+        mode: isVersus(record) ? 'pvp' : 'ai',
         status: record.status,
         winner: record.winner,
-        playerTeam: PLAYER_TEAM,
+        playerTeam: team,
         // A fúria é calculada a partir do turno; vai junto para a tela mostrar.
         state: { ...state, fury: getFuryBonus(state.turn) },
-        availableActions: getAvailableActions(record.state),
+        // Na vez do outro jogador não há o que escolher.
+        availableActions: active && active.team !== team ? [] : getAvailableActions(record.state),
+        cursor: record.events.length,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
         finishedAt: record.finishedAt,
