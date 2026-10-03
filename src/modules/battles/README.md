@@ -52,6 +52,21 @@ Toda batalha é 5 contra 5: `team` precisa ter exatamente 5 ids, sem repetir
 recebe cinco personagens sorteados. O motor (`src/game`) continua aceitando
 times de 1 a 6, e é assim que os testes fazem batalhas pequenas.
 
+### Batalha de treino (tutorial)
+
+```json
+POST /api/battles
+{ "team": ["..."], "enemyTeam": ["..."], "training": true }
+```
+
+Com `training: true` a batalha nasce marcada como treino: `state.training`
+vem `true` em todas as respostas. Nela a IA joga fraco de propósito
+(`chooseTrainingAction`, em `src/game/ai.ts`): o time dela usa só uma
+habilidade com custo por turno e os golpes miram em quem tem mais vida. É a
+batalha que o tutorial do app cria, com os dois times fixos; a tela mostra o
+guia quando vê a marca. A marca fica dentro do estado gravado, então não
+existe coluna nova no banco para ela.
+
 ### Jogar
 
 ```json

@@ -51,6 +51,52 @@ export function chooseAction(state: BattleState): BattleAction {
     throw new Error(`Nenhuma ação disponível para ${actor.id}`);
 }
 
+/**
+ * IA de treino: a adversária da batalha do tutorial. Joga mal de propósito,
+ * para quem está aprendendo conseguir vencer errando bastante, mas ainda
+ * mostra o jogo inteiro (habilidades com custo, cura, efeitos):
+ *
+ * 1. o time só usa uma habilidade com custo por turno. Enquanto a energia do
+ *    turno está intacta, a unidade da vez escolhe como a IA normal; depois
+ *    que alguém gastou, as outras ficam no ataque básico;
+ * 2. os golpes miram em quem tem MAIS vida, em vez de terminar com os
+ *    feridos: o dano se espalha e quase ninguém cai.
+ *
+ * Também não tem sorteio: a mesma batalha de treino se repete igual.
+ */
+export function chooseTrainingAction(state: BattleState): BattleAction {
+    if (state.activeUnitId === null) {
+        throw new Error('A batalha já terminou');
+    }
+
+    const actor = getUnit(state, state.activeUnitId);
+    const options = getAvailableActions(state).filter((option) => option.usable);
+    const normal = chooseAction(state);
+    const hasSpent = state.energy[actor.team] < state.turnEnergy;
+
+    let option = options.find((candidate) => candidate.skill.id === normal.skillId);
+
+    if (hasSpent && option && option.skill.energyCost > 0) {
+        // O ataque básico é sempre a primeira habilidade, sem custo (há um teste que garante).
+        option = options.find((candidate) => candidate.skill.energyCost === 0) ?? option;
+    }
+
+    if (!option) {
+        return normal;
+    }
+
+    const isAttack = option.skill.effects.some((effect) => effect.type === 'damage');
+
+    if (option.requiresTarget && isAttack) {
+        const healthiest = lowest(state, option.targetIds, (unit) => -unit.hp);
+
+        return toAction(actor.id, option, healthiest?.id);
+    }
+
+    // Cura e suporte, ou golpe em área: como a IA normal escolheu.
+    return option.skill.id === normal.skillId ? normal : toAction(actor.id, option, option.targetIds[0]);
+}
+
 function isHeal(option: AvailableAction): boolean {
     return option.skill.effects.some((effect) => effect.type === 'heal');
 }

@@ -3,5 +3,5 @@ export * from './types';
 export * from './constants';
 export * from './errors';
 export * from './engine';
-export { chooseAction } from './ai';
+export { chooseAction, chooseTrainingAction } from './ai';
 export { CHARACTERS, getCharacter } from './data/characters';

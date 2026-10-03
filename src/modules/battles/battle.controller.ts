@@ -33,7 +33,7 @@ export class BattleController {
                 return res.status(401).json({ message: req.t('auth.notAuthenticated') });
             }
 
-            const { team, enemyTeam } = req.body ?? {};
+            const { team, enemyTeam, training } = req.body ?? {};
 
             if (!isStringArray(team) || (enemyTeam !== undefined && !isStringArray(enemyTeam))) {
                 throw new BattleError('INVALID_TEAM', 400, 'battle.teamRequired');
@@ -42,6 +42,8 @@ export class BattleController {
             const result = await this.service.create(req.user.id, {
                 team,
                 ...(enemyTeam !== undefined && { enemyTeam }),
+                // Só `true` liga o treino; qualquer outra coisa é batalha normal.
+                ...(training === true && { training: true }),
             });
 
             return res.status(201).json(result);

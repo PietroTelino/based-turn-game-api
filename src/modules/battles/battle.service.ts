@@ -2,6 +2,7 @@ import {
     CHARACTERS,
     applyAction,
     chooseAction,
+    chooseTrainingAction,
     createBattle,
     getActiveUnit,
     getAvailableActions,
@@ -51,6 +52,8 @@ export interface CreateBattleInput {
     enemyTeam?: string[];
     /** Semente do motor. Só os testes usam; a rota HTTP não aceita. */
     seed?: number;
+    /** Batalha de treino (o tutorial): a IA joga fraco de propósito. */
+    training?: boolean;
 }
 
 /**
@@ -104,6 +107,12 @@ export class BattleService {
             teamB,
             ...(input.seed !== undefined && { seed: input.seed }),
         });
+
+        // A marca de treino fica no estado: é ela que diz, em cada jogada desta
+        // batalha, que a IA deve jogar fraco, e à tela, que deve mostrar o guia.
+        if (input.training) {
+            started.state.training = true;
+        }
 
         // Se as unidades da IA forem as primeiras da ordem, ela já abre a batalha.
         const { state, events } = this.playAiActions(started);
@@ -251,7 +260,7 @@ export class BattleService {
                 return { state, events };
             }
 
-            const result = applyAction(state, chooseAction(state));
+            const result = applyAction(state, state.training ? chooseTrainingAction(state) : chooseAction(state));
 
             state = result.state;
             events.push(...result.events);

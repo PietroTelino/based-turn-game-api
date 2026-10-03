@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { chooseAction } from '../ai';
+import { chooseAction, chooseTrainingAction } from '../ai';
 import { CHARACTERS, getCharacter } from '../data/characters';
 import { applyAction, createBattle, getUnit } from '../engine';
 
@@ -108,6 +108,62 @@ describe('IA', () => {
         assert.equal(state.activeUnitId, 'A1');
 
         assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'barbaro.golpe-trovejante', targetId: 'B2' });
+    });
+
+    it('de treino: mira em quem tem mais vida e só usa uma habilidade com custo por turno', () => {
+        let { state } = createBattle({
+            teamA: [getCharacter('cavaleiro'), getCharacter('clerigo')],
+            teamB: [getCharacter('barbaro'), getCharacter('piromante')],
+            seed: 1,
+        });
+
+        // O Bárbaro (B1) é o mais rápido e abre o turno com a energia intacta.
+        assert.equal(state.activeUnitId, 'B1');
+        getUnit(state, 'A1').hp = 300;
+
+        const first = chooseTrainingAction(state);
+
+        // A IA normal bateria no Cavaleiro ferido; a de treino vai no Clérigo, que está inteiro.
+        assert.equal(chooseAction(state).targetId, 'A1');
+        assert.equal(first.targetId, 'A2');
+        assert.equal(first.skillId, 'barbaro.golpe-trovejante');
+
+        // Depois que o time gastou energia no turno, os outros ficam no ataque básico.
+        state = applyAction(state, first).state;
+
+        while (state.activeUnitId !== 'B2') {
+            state = applyAction(state, chooseAction(state)).state;
+        }
+
+        assert.equal(state.turn, 1);
+        assert.ok(state.energy.B < state.turnEnergy);
+        assert.equal(chooseTrainingAction(state).skillId, getCharacter('piromante').skills[0]?.id);
+    });
+
+    it('de treino: perde para um jogador que só usa o ataque básico', () => {
+        // É a batalha do tutorial (os times ficam em src/battle/tutorial.ts, no app).
+        const player = ['cavaleiro', 'barbaro', 'piromante', 'arqueiro', 'clerigo'].map(getCharacter);
+        const enemy = ['guardiao', 'vampiro', 'espadachim', 'criomante', 'driade'].map(getCharacter);
+
+        for (const seed of [1, 2, 3, 4, 5]) {
+            let { state } = createBattle({ teamA: player, teamB: enemy, seed });
+
+            // O jogador age primeiro: é assim que a lição do tutorial começa.
+            assert.equal(getUnit(state, state.activeUnitId ?? '').team, 'A');
+
+            for (let i = 0; state.winner === null && i < 2000; i++) {
+                const actor = getUnit(state, state.activeUnitId ?? '');
+                const firstEnemy = state.units.find((unit) => unit.team === 'B' && unit.hp > 0);
+                const action =
+                    actor.team === 'A'
+                        ? { unitId: actor.id, skillId: actor.skills[0]?.id ?? '', targetId: firstEnemy?.id ?? '' }
+                        : chooseTrainingAction(state);
+
+                state = applyAction(state, action).state;
+            }
+
+            assert.equal(state.winner, 'A', `semente ${seed}`);
+        }
     });
 
     it('IA contra IA sempre chega a um vencedor, com qualquer dupla de personagens', () => {

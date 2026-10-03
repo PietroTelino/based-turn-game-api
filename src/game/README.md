@@ -100,7 +100,7 @@ Cada habilidade do catálogo tem um `element` (`physical`, `fire`, `ice`, `light
 | `data/characters.ts` | Os personagens e suas habilidades. |
 | `constants.ts` | Os números de balanceamento globais. |
 | `rng.ts` | Sorteio com semente, para a batalha ser reproduzível. |
-| `ai.ts` | Uma IA simples que escolhe a ação da unidade da vez. |
+| `ai.ts` | Uma IA simples que escolhe a ação da unidade da vez (`chooseAction`) e a IA de treino do tutorial, que joga fraco de propósito (`chooseTrainingAction`). |
 | `demo.ts` | Batalha IA contra IA impressa no terminal. |
 | `balance.ts` | Simula confrontos entre times e mostra a taxa de vitória. Quando há combinações demais, sorteia 6.000 delas (sempre as mesmas). |
 | `tests/` | Testes das regras. |

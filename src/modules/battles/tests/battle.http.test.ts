@@ -107,6 +107,16 @@ describe('rotas /api/battles', () => {
         assert.deepEqual(list.body.map((b: any) => b.id), [id]);
     });
 
+    it('POST / com training: true cria a batalha de treino; qualquer outro valor, uma batalha comum', async () => {
+        const training = await call('POST', '/', { token: player, body: { team: ['barbaro'], enemyTeam: ['cavaleiro'], training: true } });
+        const notBoolean = await call('POST', '/', { token: player, body: { team: ['barbaro'], enemyTeam: ['cavaleiro'], training: 'sim' } });
+
+        assert.equal(training.status, 201);
+        assert.equal(training.body.battle.state.training, true);
+        assert.equal(notBoolean.status, 201);
+        assert.equal(notBoolean.body.battle.state.training, undefined);
+    });
+
     it('POST /:id/surrender encerra a batalha como derrota', async () => {
         const created = await call('POST', '/', { token: player, body: { team: ['barbaro'], enemyTeam: ['cavaleiro'] } });
         const id: string = created.body.battle.id;

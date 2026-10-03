@@ -318,6 +318,70 @@ describe('BattleService: jogar', () => {
     });
 });
 
+describe('BattleService: batalha de treino (tutorial)', () => {
+    const TRAINING_TEAM = ['cavaleiro', 'barbaro', 'piromante', 'arqueiro', 'clerigo'];
+    const TRAINING_ENEMY = ['guardiao', 'vampiro', 'espadachim', 'criomante', 'driade'];
+
+    it('a marca de treino vai no estado, chega à tela e continua lá depois de cada jogada', async () => {
+        const { store, service } = setup(TEAM_SIZE);
+
+        const { battle } = await service.create(PLAYER, { team: TRAINING_TEAM, enemyTeam: TRAINING_ENEMY, seed: 1, training: true });
+
+        assert.equal(battle.state.training, true);
+        assert.equal(battle.state.activeUnitId, 'A2', 'o Bárbaro é o mais veloz: o jogador abre a batalha');
+
+        const played = await service.act(PLAYER, battle.id, { unitId: 'A2', skillId: 'barbaro.machadada', targetId: 'B1' });
+
+        assert.equal(played.battle.state.training, true);
+        assert.equal((await store.findById(battle.id))?.state.training, true);
+        assert.equal((await service.get(PLAYER, battle.id)).state.training, true);
+    });
+
+    it('batalha comum não tem a marca', async () => {
+        const { service } = setup();
+
+        const { battle } = await service.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], seed: 1 });
+
+        assert.equal(battle.state.training, undefined);
+    });
+
+    it('a IA joga fraco: uma habilidade com custo por turno, e quem só usa o ataque básico vence', async () => {
+        const { service } = setup(TEAM_SIZE);
+        const costOf = new Map(TRAINING_ENEMY.flatMap((id) => getCharacter(id).skills.map((skill) => [skill.id, skill.energyCost] as const)));
+
+        let { battle } = await service.create(PLAYER, { team: TRAINING_TEAM, enemyTeam: TRAINING_ENEMY, seed: 2, training: true });
+        let turn = 1;
+        /** Quantas habilidades com custo a IA usou em cada turno. */
+        const paidByTurn = new Map<number, number>();
+
+        for (let i = 0; battle.status === 'in_progress' && i < 500; i++) {
+            const basic = battle.availableActions[0];
+
+            assert.ok(basic, 'na vez do jogador sempre há o ataque básico');
+
+            const response = await service.act(PLAYER, battle.id, {
+                unitId: battle.state.activeUnitId ?? '',
+                skillId: basic.skill.id,
+                targetId: basic.targetIds[0] ?? '',
+            });
+
+            for (const event of response.events) {
+                if (event.type === 'turn_started') turn = event.turn;
+
+                if (event.type === 'skill_used' && event.team === 'B' && (costOf.get(event.skillId) ?? 0) > 0) {
+                    paidByTurn.set(turn, (paidByTurn.get(turn) ?? 0) + 1);
+                }
+            }
+
+            battle = response.battle;
+        }
+
+        assert.equal(battle.winner, 'A');
+        assert.ok(paidByTurn.size > 0, 'a IA de treino também usa habilidades com custo');
+        assert.ok([...paidByTurn.values()].every((count) => count === 1), JSON.stringify([...paidByTurn]));
+    });
+});
+
 describe('BattleService: batalha gravada no formato antigo', () => {
     it('abre e continua jogável (antes, o turno contava cada vez e não havia ordem gravada)', async () => {
         const { store, service } = setup();

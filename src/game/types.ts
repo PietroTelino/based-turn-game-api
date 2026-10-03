@@ -179,6 +179,12 @@ export interface BattleState {
     winner: TeamId | null;
     /** Preenchido quando a batalha acabou porque um time desistiu. */
     surrenderedBy?: TeamId;
+    /**
+     * Batalha de treino (o tutorial). O motor não usa: quem lê é quem escolhe as
+     * jogadas da IA, para ela jogar fraco (`chooseTrainingAction`), e a tela,
+     * para mostrar o guia. Fica no estado para acompanhar a batalha gravada.
+     */
+    training?: boolean;
     /** Estado do gerador de números aleatórios (ver rng.ts). */
     rngState: number;
 }
