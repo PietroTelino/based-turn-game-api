@@ -173,7 +173,15 @@ export function calculateBaseDamage(attacker: Stats, power: number, furyMultipli
  * depois cresce a cada turno. Garante que toda batalha termina.
  */
 export function getFuryMultiplier(turn: number): number {
-    return 1 + Math.max(0, turn - FURY_START_TURN) * FURY_DAMAGE_PER_TURN;
+    return 1 + getFuryBonus(turn);
+}
+
+/**
+ * Quanto a fúria aumenta o dano no turno informado, como fração: 0 enquanto
+ * ela não começou, 0.5 = +50%, 1 = +100%... É o número que a tela mostra.
+ */
+export function getFuryBonus(turn: number): number {
+    return Math.max(0, turn - FURY_START_TURN) * FURY_DAMAGE_PER_TURN;
 }
 
 /**
@@ -635,7 +643,13 @@ function startTurn(state: BattleState, events: BattleEvent[]): void {
     state.turnEnergy = getTurnEnergy(state.turn);
     state.energy = { A: state.turnEnergy, B: state.turnEnergy };
 
-    events.push({ type: 'turn_started', turn: state.turn, order: [...state.order], energy: state.turnEnergy });
+    events.push({
+        type: 'turn_started',
+        turn: state.turn,
+        order: [...state.order],
+        energy: state.turnEnergy,
+        fury: getFuryBonus(state.turn),
+    });
 }
 
 /** Mais veloz primeiro; com a mesma velocidade, quem tirou o menor número no sorteio do turno. */

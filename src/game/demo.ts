@@ -35,7 +35,7 @@ function describe(state: BattleState, event: BattleEvent): string | null {
 
     switch (event.type) {
         case 'turn_started':
-            return `\n===== Turno ${event.turn} | energia de cada time: ${event.energy} | ordem: ${event.order.map(label).join(' > ')}`;
+            return `\n===== Turno ${event.turn} | energia de cada time: ${event.energy}${event.fury > 0 ? ` | fúria: dano +${Math.round(event.fury * 100)}%` : ''} | ordem: ${event.order.map(label).join(' > ')}`;
 
         case 'order_changed':
             return `  a ordem do turno mudou: ${event.order.map(label).join(' > ')}`;

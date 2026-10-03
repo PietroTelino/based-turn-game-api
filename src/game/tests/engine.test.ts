@@ -7,6 +7,7 @@ import {
     calculateDamage,
     createBattle,
     getAvailableActions,
+    getFuryBonus,
     getFuryMultiplier,
     getTurnEnergy,
     getUnit,
@@ -44,7 +45,7 @@ describe('criação da batalha', () => {
         assert.deepEqual(state.energy, { A: INITIAL_ENERGY, B: INITIAL_ENERGY });
         assert.equal(state.turnEnergy, INITIAL_ENERGY);
         assert.deepEqual(events, [
-            { type: 'turn_started', turn: 1, order: ['B1', 'A1'], energy: INITIAL_ENERGY },
+            { type: 'turn_started', turn: 1, order: ['B1', 'A1'], energy: INITIAL_ENERGY, fury: 0 },
             { type: 'unit_activated', unitId: 'B1', team: 'B' },
         ]);
     });
@@ -762,5 +763,27 @@ describe('fúria', () => {
 
         assert.equal(damage?.amount, expected);
         assert.ok(expected > calculateDamage(stats, targetStats, 1, false));
+    });
+
+    it('o aviso de turno novo diz quanto o dano está aumentado, para a tela mostrar', () => {
+        let { state, events } = createBattle({
+            teamA: [makeCharacter('a', { maxHp: 1_000_000 })],
+            teamB: [makeCharacter('b', { maxHp: 1_000_000 })],
+            seed: 1,
+        });
+        const turns = [...eventsOfType(events, 'turn_started')];
+
+        while (state.turn < FURY_START_TURN + 2) {
+            ({ state, events } = basicAttackTurn(state));
+            turns.push(...eventsOfType(events, 'turn_started'));
+        }
+
+        const furyOf = (turn: number) => turns.find((event) => event.turn === turn)?.fury;
+
+        assert.equal(furyOf(1), 0);
+        assert.equal(furyOf(FURY_START_TURN), 0, 'no último turno normal ainda não há fúria');
+        assert.equal(furyOf(FURY_START_TURN + 1), FURY_DAMAGE_PER_TURN);
+        assert.equal(furyOf(FURY_START_TURN + 2), 2 * FURY_DAMAGE_PER_TURN);
+        assert.equal(getFuryBonus(FURY_START_TURN + 2), getFuryMultiplier(FURY_START_TURN + 2) - 1);
     });
 });

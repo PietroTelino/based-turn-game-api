@@ -73,6 +73,7 @@ Em batalha já terminada responde 409 (`BATTLE_OVER`).
             "units": [],
             "energy": { "A": 2, "B": 4 },
             "turnEnergy": 4,
+            "fury": 0,
             "turn": 2,
             "order": ["B1", "A1", "A2"],
             "activeUnitId": "A1",
@@ -85,7 +86,7 @@ Em batalha já terminada responde 409 (`BATTLE_OVER`).
 }
 ```
 
-- `state` é o estado atual. É o que a tela desenha. `energy` é o que cada time ainda tem para gastar neste turno e `turnEnergy` é com quanto os dois começaram o turno. `turn` é o turno (a rodada em que todos agem uma vez), `order` é a ordem de ação desse turno (pode mudar no meio dele, se a velocidade de alguém mudar) e `activeUnitId` diz de quem é a vez; quem vem antes dele em `order` já agiu.
+- `state` é o estado atual. É o que a tela desenha. `energy` é o que cada time ainda tem para gastar neste turno e `turnEnergy` é com quanto os dois começaram o turno. `turn` é o turno (a rodada em que todos agem uma vez), `order` é a ordem de ação desse turno (pode mudar no meio dele, se a velocidade de alguém mudar) e `activeUnitId` diz de quem é a vez; quem vem antes dele em `order` já agiu. `fury` é quanto a fúria aumenta o dano das habilidades no turno atual (0 = ainda não começou, 0.5 = +50%); a tela mostra como "Berserk +50%".
 - `events` é o que aconteceu desde a resposta anterior, em ordem. É o que a tela anima.
 - `availableActions` são os botões da unidade da vez: cada habilidade, se pode
   ser usada agora e em quem.

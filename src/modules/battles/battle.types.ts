@@ -43,9 +43,10 @@ export interface BattleStore {
 
 /**
  * O estado que o front enxerga: sem o gerador de números aleatórios e sem os
- * números sorteados no turno (são saídas do mesmo gerador).
+ * números sorteados no turno (são saídas do mesmo gerador), e com a fúria do
+ * turno atual já calculada (0 = sem fúria, 0.5 = dano +50%).
  */
-export type PublicBattleState = Omit<BattleState, 'rngState' | 'draws'>;
+export type PublicBattleState = Omit<BattleState, 'rngState' | 'draws'> & { fury: number };
 
 export interface BattleView {
     id: string;

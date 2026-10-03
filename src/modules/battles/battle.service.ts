@@ -5,6 +5,7 @@ import {
     createBattle,
     getActiveUnit,
     getAvailableActions,
+    getFuryBonus,
     surrender,
     upgradeState,
 } from '../../game';
@@ -205,7 +206,8 @@ function toView(record: BattleRecord): BattleView {
         status: record.status,
         winner: record.winner,
         playerTeam: PLAYER_TEAM,
-        state,
+        // A fúria é calculada a partir do turno; vai junto para a tela mostrar.
+        state: { ...state, fury: getFuryBonus(state.turn) },
         availableActions: getAvailableActions(record.state),
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,

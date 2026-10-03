@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { GameRuleError, chooseAction, createBattle, getCharacter } from '../../../game';
+import { FURY_DAMAGE_PER_TURN, FURY_START_TURN, GameRuleError, chooseAction, createBattle, getCharacter } from '../../../game';
 import type { BattleState, GameRuleErrorCode } from '../../../game';
 import { BattleError } from '../battle.errors';
 import type { BattleErrorCode } from '../battle.errors';
@@ -59,7 +59,7 @@ describe('BattleService: criar batalha', () => {
 
         assert.equal(battle.state.activeUnitId, 'A1');
         assert.equal(battle.state.turn, 1, 'a IA jogou, mas o turno 1 só acaba depois da vez do jogador');
-        assert.deepEqual(events[0], { type: 'turn_started', turn: 1, order: ['B1', 'A1'], energy: 3 });
+        assert.deepEqual(events[0], { type: 'turn_started', turn: 1, order: ['B1', 'A1'], energy: 3, fury: 0 });
         assert.deepEqual(events[1], { type: 'unit_activated', unitId: 'B1', team: 'B' });
         assert.ok(last?.type === 'unit_activated' && last.unitId === 'A1', 'a resposta termina na vez do jogador');
         assert.deepEqual(events[2], {
@@ -252,6 +252,23 @@ describe('BattleService: jogar', () => {
 
         await rejectsWith(service.surrender(OTHER_PLAYER, battle.id), 'BATTLE_NOT_FOUND');
         assert.equal((await store.findById(battle.id))?.status, 'in_progress');
+    });
+
+    it('a batalha enviada para a tela diz quanto a fúria aumenta o dano no turno atual', async () => {
+        const { store, service } = setup();
+        const { battle } = await service.create(PLAYER, { team: ['cavaleiro'], enemyTeam: ['cavaleiro'], seed: 1 });
+
+        assert.equal(battle.state.fury, 0);
+
+        // Avança a batalha gravada para dois turnos depois do começo da fúria.
+        const stored = await store.findById(battle.id);
+
+        assert.ok(stored);
+        stored.state.turn = FURY_START_TURN + 2;
+        await store.saveIfStep(battle.id, stored.step, { ...stored, turn: stored.state.turn });
+
+        assert.equal((await service.get(PLAYER, battle.id)).state.fury, 2 * FURY_DAMAGE_PER_TURN);
+        assert.ok(!('fury' in ((await store.findById(battle.id))?.state ?? {})), 'é calculada na hora, não fica gravada');
     });
 
     it('lista só as batalhas do próprio jogador, sem o estado completo', async () => {

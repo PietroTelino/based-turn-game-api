@@ -52,7 +52,7 @@ A **energia** segue o turno: quando um turno começa, os dois times recebem a en
 | Cura | `ATK x poder`, sem passar da vida máxima. | `calculateHeal` |
 | Roubo de vida | Um efeito de dano com `drain` cura quem bateu numa fração da vida que o alvo perdeu (o que o escudo segurou não conta). Ex.: `{ type: 'damage', power: 1.5, drain: 0.5 }`. | `applyEffect` |
 | Golpes seguidos | Uma habilidade com vários efeitos de dano acerta várias vezes; cada golpe tem seu próprio crítico e eles param quando o alvo cai. | `data/characters.ts` |
-| Fúria | Depois do turno 8 o dano cresce 50% por turno, para toda batalha ter fim. | `constants.ts` |
+| Fúria | Depois do turno 8 o dano das habilidades cresce 50% por turno (turno 9: +50%, turno 10: +100%...), para toda batalha ter fim. Queimadura e veneno não aumentam. Na tela aparece como "Berserk +50%". | `constants.ts`, `getFuryBonus` |
 | Status | Efeitos que ficam na unidade por alguns turnos. Veja a seção abaixo. | `applyEffect`, `activateNext`, `endActivation` |
 | Vitória | Vence quem derrotar todas as unidades do outro time. | `findWinner` |
 | Desistência | Um time pode desistir a qualquer momento; o outro vence na hora. | `surrender` |
@@ -85,7 +85,7 @@ Regras de duração:
 
 O ciclo de uma vez fica assim: queimadura e veneno causam dano, a unidade atordoada perde a vez, a unidade age, os status dela gastam um turno.
 
-Para a tela, o motor emite `turn_started` (turno novo, com a ordem), `order_changed` (a ordem mudou no meio do turno), `unit_activated` (chegou a vez de alguém), `status_applied`, `status_damage`, `status_expired` e `unit_skipped` (para animar) e `statuses_changed`, que traz a lista completa de status da unidade depois de qualquer mudança. A tela só copia essa lista.
+Para a tela, o motor emite `turn_started` (turno novo, com a ordem, a energia e quanto a fúria vale), `order_changed` (a ordem mudou no meio do turno), `unit_activated` (chegou a vez de alguém), `status_applied`, `status_damage`, `status_expired` e `unit_skipped` (para animar) e `statuses_changed`, que traz a lista completa de status da unidade depois de qualquer mudança. A tela só copia essa lista.
 
 ## Elemento das habilidades
 

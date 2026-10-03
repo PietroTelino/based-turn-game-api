@@ -199,8 +199,10 @@ export type BattleEvent =
     /**
      * Um turno novo começou. `order` é a ordem de ação dele, já sorteada, e
      * `energy` é a energia com que os dois times começam o turno.
+     * `fury` é quanto o dano das habilidades está aumentado neste turno
+     * (0 = sem fúria, 0.5 = +50%).
      */
-    | { type: 'turn_started'; turn: number; order: string[]; energy: number }
+    | { type: 'turn_started'; turn: number; order: string[]; energy: number; fury: number }
     /** A velocidade de alguém mudou no meio do turno e quem ainda não agiu foi reordenado. */
     | { type: 'order_changed'; order: string[] }
     /** Chegou a vez de uma unidade. */
