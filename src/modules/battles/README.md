@@ -89,6 +89,7 @@ Em batalha já terminada responde 409 (`BATTLE_OVER`).
 - `events` é o que aconteceu desde a resposta anterior, em ordem. É o que a tela anima.
 - `availableActions` são os botões da unidade da vez: cada habilidade, se pode
   ser usada agora e em quem.
+- Cada item de `availableActions` traz também `preview: { damage, heal }`: o dano base e a cura base da habilidade para quem está na vez agora (ATK atual x poder, com a fúria, sem a defesa do alvo e sem crítico). `null` quando a habilidade não causa dano ou não cura. É o número que a tela mostra junto da descrição.
 
 Depois da jogada do jogador a IA joga sozinha até a vez voltar para ele, então
 uma única resposta pode trazer várias jogadas (e até a virada de turno) em

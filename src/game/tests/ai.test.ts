@@ -22,12 +22,12 @@ describe('catálogo de personagens', () => {
         }
     });
 
-    it('toda habilidade tem elemento, e só golpe de alvo único inimigo é à distância', () => {
+    it('toda habilidade tem elemento, e só golpe em inimigos é à distância', () => {
         for (const skill of CHARACTERS.flatMap((c) => c.skills)) {
             assert.ok(skill.element, skill.id);
 
             if (skill.ranged) {
-                assert.equal(skill.target, 'single-enemy', skill.id);
+                assert.ok(skill.target === 'single-enemy' || skill.target === 'all-enemies', skill.id);
             }
         }
     });

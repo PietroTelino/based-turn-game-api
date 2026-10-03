@@ -48,7 +48,10 @@ A **energia** segue o turno: quando um turno começa, os dois times recebem a en
 | Energia | Compartilhada pelo time e reabastecida a cada turno: 3 no turno 1, mais 1 por turno, até 10. O que sobra não acumula. | `constants.ts`, `getTurnEnergy` |
 | Habilidades | A primeira é o ataque básico (custo 0). As outras gastam energia. | `data/characters.ts` |
 | Dano | `ATK x poder x 100 / (100 + DEF)`, vezes o multiplicador de crítico. | `calculateDamage` |
+| Dano base | `ATK x poder` (com a fúria), sem a defesa do alvo e sem crítico. É o número mostrado na descrição da habilidade durante a batalha, junto com a cura base. | `calculateBaseDamage`, `previewSkill` |
 | Cura | `ATK x poder`, sem passar da vida máxima. | `calculateHeal` |
+| Roubo de vida | Um efeito de dano com `drain` cura quem bateu numa fração da vida que o alvo perdeu (o que o escudo segurou não conta). Ex.: `{ type: 'damage', power: 1.5, drain: 0.5 }`. | `applyEffect` |
+| Golpes seguidos | Uma habilidade com vários efeitos de dano acerta várias vezes; cada golpe tem seu próprio crítico e eles param quando o alvo cai. | `data/characters.ts` |
 | Fúria | Depois do turno 8 o dano cresce 50% por turno, para toda batalha ter fim. | `constants.ts` |
 | Status | Efeitos que ficam na unidade por alguns turnos. Veja a seção abaixo. | `applyEffect`, `activateNext`, `endActivation` |
 | Vitória | Vence quem derrotar todas as unidades do outro time. | `findWinner` |
@@ -86,7 +89,7 @@ Para a tela, o motor emite `turn_started` (turno novo, com a ordem), `order_chan
 
 ## Elemento das habilidades
 
-Cada habilidade do catálogo tem um `element` (`physical`, `fire`, `ice`, `lightning`, `nature` ou `light`) e pode ter `ranged: true`. Os dois campos **não entram em nenhuma conta**: existem para a tela escolher o efeito visual e o som. `ranged` só faz diferença em habilidade de alvo único inimigo (projétil em vez de avanço). Se um dia houver fraqueza por elemento, o dado já está aqui.
+Cada habilidade do catálogo tem um `element` (`physical`, `fire`, `ice`, `lightning`, `nature`, `light` ou `shadow`) e pode ter `ranged: true`. Os dois campos **não entram em nenhuma conta**: existem para a tela escolher o efeito visual e o som. `ranged` só vale em golpe contra inimigos: num alvo só, a tela mostra um projétil em vez de a unidade avançar; em área, uma chuva de projéteis. Se um dia houver fraqueza por elemento, o dado já está aqui.
 
 ## Arquivos
 
@@ -99,7 +102,7 @@ Cada habilidade do catálogo tem um `element` (`physical`, `fire`, `ice`, `light
 | `rng.ts` | Sorteio com semente, para a batalha ser reproduzível. |
 | `ai.ts` | Uma IA simples que escolhe a ação da unidade da vez. |
 | `demo.ts` | Batalha IA contra IA impressa no terminal. |
-| `balance.ts` | Simula todas as combinações de times e mostra a taxa de vitória. |
+| `balance.ts` | Simula confrontos entre times e mostra a taxa de vitória. Quando há combinações demais, sorteia 6.000 delas (sempre as mesmas). |
 | `tests/` | Testes das regras. |
 
 ## Comandos
@@ -117,3 +120,6 @@ Acrescente um objeto em `data/characters.ts`. A primeira habilidade precisa ser
 o ataque básico (custo 0, alvo `single-enemy`). Os efeitos de uma habilidade
 acontecem na ordem em que estão escritos. Depois rode `npm test` e
 `npm run battle:balance` para ver se ele ficou forte ou fraco demais.
+
+A arte fica no front, em `src/assets/characters/`, com o `id` do personagem
+no nome do arquivo.

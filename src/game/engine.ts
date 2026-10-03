@@ -19,6 +19,7 @@ import type {
     CharacterDefinition,
     SkillDefinition,
     SkillEffect,
+    SkillPreview,
     Stats,
     StatusEffect,
     StatusKind,
@@ -160,6 +161,14 @@ export function calculateDamage(
 }
 
 /**
+ * O dano de um golpe antes da defesa do alvo e sem crítico: ATK x poder (x
+ * fúria). É o número que a tela mostra na descrição da habilidade.
+ */
+export function calculateBaseDamage(attacker: Stats, power: number, furyMultiplier = 1): number {
+    return Math.max(1, Math.round(attacker.atk * power * furyMultiplier));
+}
+
+/**
  * Multiplicador de dano da fúria no turno informado: 1 até FURY_START_TURN,
  * depois cresce a cada turno. Garante que toda batalha termina.
  */
@@ -207,11 +216,34 @@ export function getAvailableActions(state: BattleState): AvailableAction[] {
 
         return {
             skill,
+            preview: previewSkill(state, actor, skill),
             usable: hasEnergy && targetIds.length > 0,
             requiresTarget: requiresTarget(skill),
             targetIds,
         };
     });
+}
+
+/**
+ * Quanto a habilidade causaria (ou curaria) em cada alvo se `actor` a usasse
+ * agora, sem contar a defesa de ninguém. Se a habilidade tiver mais de um
+ * efeito de dano (ou de cura), eles são somados.
+ */
+export function previewSkill(state: BattleState, actor: BattleUnit, skill: SkillDefinition): SkillPreview {
+    const stats = getEffectiveStats(actor);
+    const fury = getFuryMultiplier(state.turn);
+    let damage: number | null = null;
+    let heal: number | null = null;
+
+    for (const effect of skill.effects) {
+        if (effect.type === 'damage') {
+            damage = (damage ?? 0) + calculateBaseDamage(stats, effect.power, fury);
+        } else if (effect.type === 'heal') {
+            heal = (heal ?? 0) + calculateHeal(stats, effect.power);
+        }
+    }
+
+    return { damage, heal };
 }
 
 // ---------------------------------------------------------------------------
@@ -432,8 +464,9 @@ function applyEffect(
                 fury,
             );
             const absorbed = absorbWithShield(target, amount);
+            const lost = Math.min(target.hp, amount - absorbed);
 
-            target.hp = Math.max(0, target.hp - (amount - absorbed));
+            target.hp -= lost;
             events.push({
                 type: 'damage',
                 sourceId: actor.id,
@@ -450,6 +483,16 @@ function applyEffect(
                 }
 
                 pushStatusesChanged(target, events);
+            }
+
+            // Roubo de vida: quem bateu recupera uma fração do que o alvo perdeu.
+            if (effect.drain !== undefined && lost > 0) {
+                const healed = Math.min(actor.stats.maxHp - actor.hp, Math.round(lost * effect.drain));
+
+                if (healed > 0) {
+                    actor.hp += healed;
+                    events.push({ type: 'heal', sourceId: actor.id, targetId: actor.id, amount: healed, hp: actor.hp });
+                }
             }
 
             if (!isAlive(target)) {

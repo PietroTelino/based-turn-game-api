@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { ENERGY_GROWTH_PER_TURN, FURY_DAMAGE_PER_TURN, FURY_START_TURN, INITIAL_ENERGY, MAX_ENERGY } from '../constants';
 import {
     applyAction,
+    calculateBaseDamage,
     calculateDamage,
     createBattle,
     getAvailableActions,
@@ -584,6 +585,132 @@ describe('alvos', () => {
 
         // 100 de ATK x 0.5 de poder = 50 de cura
         assert.equal(getUnit(result.state, 'A1').hp, 550);
+    });
+});
+
+describe('números mostrados na descrição da habilidade', () => {
+    const fireball = skill('a1.fireball', { effects: [{ type: 'damage', power: 1.5 }, { type: 'status', status: 'burn', turns: 2, power: 0.3 }] });
+    const heal = skill('a1.heal', { target: 'single-ally', effects: [{ type: 'heal', power: 1.8 }] });
+    const bless = skill('a1.bless', { target: 'all-allies', effects: [{ type: 'status', status: 'atk_up', turns: 2, power: 0.5 }] });
+
+    function setup() {
+        return createBattle({
+            teamA: [makeCharacter('a1', { atk: 200, speed: 200 }, [fireball, heal, bless]), makeCharacter('a2')],
+            teamB: [makeCharacter('b', { def: 300 })],
+            seed: 1,
+        }).state;
+    }
+
+    const previews = (state: BattleState) => getAvailableActions(state).map((a) => [a.skill.id, a.preview.damage, a.preview.heal]);
+
+    it('dano base é ATK x poder, sem a defesa do alvo; cura base é ATK x poder', () => {
+        assert.deepEqual(previews(setup()), [
+            ['a1.basic', 200, null],
+            ['a1.fireball', 300, null],
+            ['a1.heal', null, 360],
+            ['a1.bless', null, null],
+        ]);
+    });
+
+    it('acompanha o ataque atual de quem usa: bônus e penalidades entram na conta', () => {
+        const state = setup();
+
+        getUnit(state, 'A1').statuses = [{ kind: 'atk_up', turns: 2, value: 0.5, sourceId: 'A1', appliedOnStep: 0 }];
+
+        assert.deepEqual(previews(state).slice(0, 3), [
+            ['a1.basic', 300, null],
+            ['a1.fireball', 450, null],
+            ['a1.heal', null, 540],
+        ]);
+    });
+
+    it('a fúria aumenta o dano mostrado, mas não a cura', () => {
+        const state = setup();
+
+        state.turn = FURY_START_TURN + 2;
+
+        const fury = getFuryMultiplier(state.turn);
+
+        assert.deepEqual(previews(state).slice(1, 3), [
+            ['a1.fireball', Math.round(300 * fury), null],
+            ['a1.heal', null, 360],
+        ]);
+    });
+
+    it('o dano que o alvo leva é o dano base reduzido pela defesa dele', () => {
+        const state = setup();
+        const base = getAvailableActions(state).find((a) => a.skill.id === 'a1.fireball')?.preview.damage;
+        const { events } = applyAction(state, { unitId: 'A1', skillId: 'a1.fireball', targetId: 'B1' });
+        const [damage] = eventsOfType(events, 'damage');
+
+        // 300 de DEF: o alvo leva um quarto do dano base.
+        assert.equal(base, calculateBaseDamage(getUnit(state, 'A1').stats, 1.5));
+        assert.equal(damage?.amount, 75);
+        assert.equal(base, 300);
+    });
+});
+
+describe('roubo de vida e golpes múltiplos', () => {
+    const bite = skill('a.bite', { effects: [{ type: 'damage', power: 1, drain: 0.5 }] });
+    const flurry = skill('a.flurry', { effects: [{ type: 'damage', power: 0.5 }, { type: 'damage', power: 0.5 }, { type: 'damage', power: 0.5 }] });
+
+    function setup() {
+        // 200 de ATK contra 100 de DEF: o golpe de poder 1 tira 100.
+        const state = createBattle({
+            teamA: [makeCharacter('a', { atk: 200, speed: 200 }, [bite, flurry])],
+            teamB: [makeCharacter('b', { def: 100 })],
+            seed: 1,
+        }).state;
+
+        getUnit(state, 'A1').hp = 500;
+
+        return state;
+    }
+
+    it('quem usa recupera a fração do dano que o alvo perdeu', () => {
+        const { state, events } = applyAction(setup(), { unitId: 'A1', skillId: 'a.bite', targetId: 'B1' });
+
+        assert.equal(getUnit(state, 'B1').hp, 900);
+        assert.equal(getUnit(state, 'A1').hp, 550);
+        assert.deepEqual(eventsOfType(events, 'heal'), [{ type: 'heal', sourceId: 'A1', targetId: 'A1', amount: 50, hp: 550 }]);
+    });
+
+    it('não passa da vida máxima, e o que o escudo segurou não conta', () => {
+        const full = setup();
+
+        getUnit(full, 'A1').hp = 980;
+        assert.equal(getUnit(applyAction(full, { unitId: 'A1', skillId: 'a.bite', targetId: 'B1' }).state, 'A1').hp, 1000);
+
+        const shielded = setup();
+
+        getUnit(shielded, 'B1').statuses = [{ kind: 'shield', turns: 2, value: 60, sourceId: 'B1', appliedOnStep: 0 }];
+
+        const result = applyAction(shielded, { unitId: 'A1', skillId: 'a.bite', targetId: 'B1' });
+
+        // Dos 100 de dano, o escudo segurou 60: o alvo perdeu 40 e quem bateu recupera 20.
+        assert.equal(getUnit(result.state, 'B1').hp, 960);
+        assert.equal(getUnit(result.state, 'A1').hp, 520);
+    });
+
+    it('habilidade com vários golpes acerta o mesmo alvo várias vezes, e a descrição mostra a soma', () => {
+        const state = setup();
+        const preview = getAvailableActions(state).find((a) => a.skill.id === 'a.flurry')?.preview;
+        const { state: after, events } = applyAction(state, { unitId: 'A1', skillId: 'a.flurry', targetId: 'B1' });
+
+        assert.equal(preview?.damage, 300);
+        assert.deepEqual(eventsOfType(events, 'damage').map((e) => [e.targetId, e.amount]), [['B1', 50], ['B1', 50], ['B1', 50]]);
+        assert.equal(getUnit(after, 'B1').hp, 850);
+    });
+
+    it('os golpes param quando o alvo cai', () => {
+        const state = setup();
+
+        getUnit(state, 'B1').hp = 60;
+
+        const { state: after, events } = applyAction(state, { unitId: 'A1', skillId: 'a.flurry', targetId: 'B1' });
+
+        assert.equal(eventsOfType(events, 'damage').length, 2);
+        assert.equal(after.winner, 'A');
     });
 });
 

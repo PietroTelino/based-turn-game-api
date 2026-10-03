@@ -77,9 +77,13 @@ export interface StatusEffect {
  * são ATK x power; nos modificadores é a própria fração (0.3 = 30%).
  * `chance` (0 a 1) é a chance de pegar; sem ela, sempre pega.
  * `to: 'self'` aplica em quem usou, mesmo que a habilidade mire em inimigos.
+ *
+ * No efeito 'damage', `drain` é roubo de vida: quem usou recupera essa fração
+ * do dano que o alvo de fato perdeu (0.5 = metade). O que o escudo segurou
+ * não conta.
  */
 export type SkillEffect =
-    | { type: 'damage'; power: number }
+    | { type: 'damage'; power: number; drain?: number }
     | { type: 'heal'; power: number }
     | { type: 'status'; status: StatusKind; turns: number; power: number; chance?: number; to?: 'target' | 'self' };
 
@@ -87,7 +91,7 @@ export type SkillEffect =
  * Elemento de uma habilidade. Por enquanto não entra em nenhuma conta: serve
  * para a tela escolher o efeito visual e o som. Sem elemento, vale 'physical'.
  */
-export type SkillElement = 'physical' | 'fire' | 'ice' | 'lightning' | 'nature' | 'light';
+export type SkillElement = 'physical' | 'fire' | 'ice' | 'lightning' | 'nature' | 'light' | 'shadow';
 
 export interface SkillDefinition {
     id: string;
@@ -98,7 +102,11 @@ export interface SkillDefinition {
     target: TargetType;
     effects: SkillEffect[];
     element?: SkillElement;
-    /** Golpe à distância: a tela mostra um projétil em vez de a unidade avançar. */
+    /**
+     * Golpe à distância. Em alvo único, a tela mostra um projétil em vez de a
+     * unidade avançar; em área, uma chuva de projéteis em vez do efeito do
+     * elemento.
+     */
     ranged?: boolean;
 }
 
@@ -223,9 +231,24 @@ export interface BattleResult {
     events: BattleEvent[];
 }
 
+/**
+ * Os números de uma habilidade para quem vai usá-la agora: é o que a tela
+ * mostra junto da descrição. São valores "base": já contam o ataque atual de
+ * quem usa (com bônus e penalidades) e a fúria, mas não a defesa nem o escudo
+ * do alvo, nem o acerto crítico. `null` quando a habilidade não causa dano
+ * (ou não cura).
+ */
+export interface SkillPreview {
+    /** Dano em cada alvo, antes da defesa. */
+    damage: number | null;
+    /** Cura em cada alvo (limitada, na hora, pela vida que falta ao alvo). */
+    heal: number | null;
+}
+
 /** Uma opção que a unidade da vez tem. Serve para a IA e para os botões do front. */
 export interface AvailableAction {
     skill: SkillDefinition;
+    preview: SkillPreview;
     /** false quando falta energia ou não há alvo possível. */
     usable: boolean;
     /** true quando o jogador precisa escolher um dos targetIds. */
