@@ -36,6 +36,8 @@ export type TargetType = 'single-enemy' | 'all-enemies' | 'single-ally' | 'all-a
  * - burn / poison: leva dano no começo de cada turno seu.
  * - shield: absorve dano antes da vida.
  * - *_up / *_down: aumenta ou reduz um atributo em uma fração (0.3 = 30%).
+ * - passive_up: a passiva de começo de vez da unidade cura e causa dano mais
+ *   forte, em uma fração (0.8 = 80% a mais).
  */
 export type StatusKind =
     | 'stun'
@@ -47,7 +49,8 @@ export type StatusKind =
     | 'def_up'
     | 'def_down'
     | 'speed_up'
-    | 'speed_down';
+    | 'speed_down'
+    | 'passive_up';
 
 /** Um status ativo em uma unidade. */
 export interface StatusEffect {
@@ -59,10 +62,24 @@ export interface StatusEffect {
     turns: number;
     /**
      * O significado depende do tipo: dano por turno (burn, poison), pontos
-     * restantes (shield) ou fração do atributo (modificadores). Zero no stun.
+     * restantes (shield) ou fração (modificadores de atributo e passive_up).
+     * Zero no stun.
      */
     value: number;
     sourceId: string;
+    /**
+     * Só nos status de dano por turno que crescem (passiva `status_growth` de
+     * quem aplicou): a cada vez que o status causa dano, o próximo dano sobe
+     * esta fração do valor original (0.6 = +60% por turno). O dano de agora é
+     * `value x (1 + growth x ticks)`.
+     */
+    growth?: number;
+    /**
+     * Quantas vezes o status que cresce já causou dano neste alvo. Renovar o
+     * status enquanto ele está ativo mantém a conta; se ele acabar, o próximo
+     * começa do zero.
+     */
+    ticks?: number;
     /**
      * A "vez" (BattleState.step) em que foi aplicado. Um status que a unidade
      * recebe durante a própria vez não gasta duração no fim dessa mesma vez.
@@ -81,9 +98,14 @@ export interface StatusEffect {
  * No efeito 'damage', `drain` é roubo de vida: quem usou recupera essa fração
  * do dano que o alvo de fato perdeu (0.5 = metade). O que o escudo segurou
  * não conta.
+ *
+ * `perTargetMissingHp` é o golpe de execução: para cada 1% da vida máxima que
+ * o ALVO já perdeu, o golpe causa essa porcentagem a mais (1: num alvo com 40%
+ * da vida perdida, +40% de dano). Conta em pontos inteiros de porcentagem e
+ * soma com os bônus das passivas de quem bate.
  */
 export type SkillEffect =
-    | { type: 'damage'; power: number; drain?: number }
+    | { type: 'damage'; power: number; drain?: number; perTargetMissingHp?: number }
     | { type: 'heal'; power: number }
     | { type: 'status'; status: StatusKind; turns: number; power: number; chance?: number; to?: 'target' | 'self' };
 
@@ -134,9 +156,31 @@ export type PassiveCondition =
  * - atk_from_def: soma ao ataque esta fração da defesa de quem bate;
  * - lifesteal: quem bate recupera esta fração do dano que o alvo perdeu
  *   (soma com o `drain` da habilidade);
- * - energy_on_crit: num acerto crítico, o time recupera esta energia.
+ * - energy_on_crit: num acerto crítico, o time recupera esta energia;
+ * - damage_per_drain: a passiva acumula cargas. Cada vez que a unidade
+ *   recupera vida com roubo de vida (o `drain` de uma habilidade, ou
+ *   `lifesteal`), ganha uma carga, e cada carga soma `amount` ao dano dos
+ *   golpes dela até o fim da batalha (0.05 = +5% por carga). `max` limita as
+ *   cargas; sem ele, não há limite. As cargas ficam em `unit.passiveStacks`;
+ * - damage_per_missing_hp: quanto mais ferida a unidade, mais forte ela bate.
+ *   Para cada 1% da vida máxima que ela perdeu, os golpes causam `amount`%
+ *   a mais (amount 1: com 40% da vida perdida, +40% de dano). Conta em
+ *   pontos inteiros de porcentagem e acompanha a vida: se ela é curada, o
+ *   bônus cai.
+ *
+ * status_on_hit: todo golpe da unidade também aplica um status no alvo
+ * (`power`, `turns` e `chance` como no efeito 'status' de uma habilidade). O
+ * status é aplicado depois do dano, então não vale para o próprio golpe que o
+ * aplicou. Se o alvo já carrega o mesmo status com valor maior, fica o maior.
  *
  * status_power aumenta o valor dos status que a unidade aplica (0.4 = +40%).
+ *
+ * status_growth faz o dano por turno (veneno, queimadura) que a unidade aplica
+ * crescer com o tempo: o primeiro dano é o normal, e a cada turno que o alvo
+ * continua com o status o dano sobe `amount` do valor original (0.6: 100%,
+ * 160%, 220%...). Renovar o status antes de ele acabar mantém o crescimento,
+ * mesmo que quem renove seja um aliado sem a passiva; se o status acabar, o
+ * próximo começa do normal. A conta fica no próprio status (`growth`, `ticks`).
  *
  * turn_start é a passiva que age sozinha: no começo da vez da unidade (se ela
  * não estiver atordoada), os `effects` são aplicados no alvo indicado, como
@@ -149,7 +193,11 @@ export type PassiveEffect =
     | { type: 'atk_from_def'; amount: number }
     | { type: 'lifesteal'; amount: number }
     | { type: 'energy_on_crit'; amount: number }
+    | { type: 'status_on_hit'; status: StatusKind; turns: number; power: number; chance?: number }
+    | { type: 'damage_per_drain'; amount: number; max?: number }
+    | { type: 'damage_per_missing_hp'; amount: number }
     | { type: 'status_power'; statuses: StatusKind[]; amount: number }
+    | { type: 'status_growth'; statuses: StatusKind[]; amount: number }
     | { type: 'turn_start'; target: 'all-allies' | 'fastest-enemy'; effects: SkillEffect[] };
 
 export interface PassiveDefinition {
@@ -158,6 +206,8 @@ export interface PassiveDefinition {
     name: string;
     description: string;
     effect: PassiveEffect;
+    /** Outros efeitos da mesma passiva, quando ela faz mais de uma coisa. */
+    also?: PassiveEffect[];
     /** Como em SkillDefinition: só para a tela escolher o efeito visual e o som. */
     element?: SkillElement;
     ranged?: boolean;
@@ -199,6 +249,8 @@ export interface BattleUnit {
      * passivas existirem não têm o campo: nelas ninguém tem passiva.
      */
     passives?: PassiveDefinition[];
+    /** Cargas acumuladas pela passiva da unidade, nas passivas que acumulam (damage_per_drain). */
+    passiveStacks?: number;
 }
 
 export interface BattleState {
@@ -296,8 +348,11 @@ export type BattleEvent =
      * alvo desse golpe. Para as de começo de vez, vem antes dos efeitos dela, e
      * `targetIds` é quem ela atingiu. Passivas que valem em todo golpe (como
      * roubo de vida) não avisam: o resultado já aparece nos outros eventos.
+     *
+     * Numa passiva que acumula cargas, o aviso vem depois dos golpes da ação
+     * em que ela ganhou carga, e `stacks` é quantas cargas ela tem agora.
      */
-    | { type: 'passive_triggered'; unitId: string; passiveId: string; targetIds: string[] }
+    | { type: 'passive_triggered'; unitId: string; passiveId: string; targetIds: string[]; stacks?: number }
     /** O time recuperou energia no meio do turno, por causa de `unitId`. `energy` é quanto ele tem agora. */
     | { type: 'energy_gained'; team: TeamId; unitId: string; amount: number; energy: number }
     /** Um time desistiu. Vem sempre seguido de battle_ended. */

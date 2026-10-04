@@ -25,6 +25,7 @@ const STATUS_NAMES: Record<StatusKind, string> = {
     def_down: 'defesa reduzida',
     speed_up: 'velocidade aumentada',
     speed_down: 'velocidade reduzida',
+    passive_up: 'passiva fortalecida',
 };
 
 function describe(state: BattleState, event: BattleEvent): string | null {
@@ -72,7 +73,7 @@ function describe(state: BattleState, event: BattleEvent): string | null {
 
         case 'passive_triggered': {
             const passive = getUnit(state, event.unitId).passives?.find((p) => p.id === event.passiveId);
-            return `  passiva de ${label(event.unitId)}: ${passive?.name ?? event.passiveId}`;
+            return `  passiva de ${label(event.unitId)}: ${passive?.name ?? event.passiveId}${event.stacks === undefined ? '' : ` (${event.stacks} carga(s))`}`;
         }
 
         case 'energy_gained':

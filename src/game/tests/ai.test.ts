@@ -38,15 +38,39 @@ describe('catálogo de personagens', () => {
         }
     });
 
+    it('a descrição de um golpe de execução diz quanto ele cresce com a vida que o alvo perdeu', () => {
+        const executes = CHARACTERS.flatMap((c) => c.skills).filter((skill) => skill.effects.some((effect) => effect.type === 'damage' && effect.perTargetMissingHp));
+
+        assert.deepEqual(executes.map((skill) => skill.id), ['ladino.golpe-fatal']);
+
+        for (const skill of executes) {
+            for (const effect of skill.effects) {
+                if (effect.type === 'damage' && effect.perTargetMissingHp) {
+                    assert.ok(skill.description.includes(`${effect.perTargetMissingHp}% a mais`), `${skill.id}: a descrição deveria dizer o bônus`);
+                }
+            }
+        }
+    });
+
     it('a descrição de cada passiva diz os mesmos números que o efeito dela', () => {
         const percent = (fraction: number) => `${Math.round(fraction * 100)}%`;
 
-        for (const { id, description, effect } of CHARACTERS.flatMap((c) => c.passives)) {
-            // Os números que precisam aparecer no texto, conforme o tipo da passiva.
+        // Uma passiva pode ter mais de um efeito (`also`): a descrição precisa dizer os números de todos.
+        const entries = CHARACTERS.flatMap((c) => c.passives).flatMap((passive) =>
+            [passive.effect, ...(passive.also ?? [])].map((effect) => ({ id: passive.id, description: passive.description, effect })),
+        );
+
+        for (const { id, description, effect } of entries) {
+            // Os números que precisam aparecer no texto, conforme o tipo do efeito.
             const numbers: string[] = [];
 
             if (effect.type === 'energy_on_crit') {
                 numbers.push(`${effect.amount} de energia`);
+            } else if (effect.type === 'damage_per_missing_hp') {
+                // "Para cada 1% de vida perdida, N% a mais."
+                numbers.push(`${effect.amount}% a mais`);
+            } else if (effect.type === 'status_on_hit') {
+                numbers.push(percent(effect.power), `${effect.turns} turno`);
             } else if (effect.type === 'turn_start') {
                 for (const item of effect.effects) {
                     numbers.push(percent(item.power));
@@ -54,6 +78,10 @@ describe('catálogo de personagens', () => {
                 }
             } else {
                 numbers.push(percent(effect.amount));
+
+                if (effect.type === 'damage_per_drain' && effect.max !== undefined) {
+                    numbers.push(`${effect.max} vezes`);
+                }
 
                 if ('when' in effect && effect.when && effect.when.type !== 'target_has_status') {
                     numbers.push(percent(effect.when.ratio));
@@ -122,12 +150,15 @@ describe('IA', () => {
         assert.equal(state.activeUnitId, 'A1');
         assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'clerigo.bencao' });
 
+        // O time como fica depois da Bênção: todos com os bônus, e o Clérigo com a passiva fortalecida.
         for (const unit of state.units.filter((u) => u.team === 'A')) {
             unit.statuses = [
                 { kind: 'speed_up', turns: 2, value: 0.3, sourceId: 'A1', appliedOnStep: 0 },
                 { kind: 'atk_up', turns: 2, value: 0.2, sourceId: 'A1', appliedOnStep: 0 },
             ];
         }
+
+        getUnit(state, 'A1').statuses.push({ kind: 'passive_up', turns: 2, value: 0.8, sourceId: 'A1', appliedOnStep: 0 });
 
         assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'clerigo.raio-de-luz', targetId: 'B1' });
     });
@@ -140,7 +171,8 @@ describe('IA', () => {
         });
 
         state.activeUnitId = 'A1';
-        state.energy.A = 2;
+        // Energia só para o Juramento de Guarda (1): o Brado de Guerra (2) fica de fora.
+        state.energy.A = 1;
         getUnit(state, 'A2').hp = 600;
         getUnit(state, 'A3').hp = 600;
         getUnit(state, 'A3').statuses = [{ kind: 'shield', turns: 2, value: 100, sourceId: 'A1', appliedOnStep: 0 }];

@@ -51,6 +51,7 @@ A **energia** segue o turno: quando um turno começa, os dois times recebem a en
 | Dano base | `ATK x poder` (com a fúria e as passivas que valem em todo golpe), sem a defesa do alvo, sem crítico e sem as passivas que dependem do alvo. É o número mostrado na descrição da habilidade durante a batalha, junto com a cura base. | `calculateBaseDamage`, `previewSkill` |
 | Cura | `ATK x poder`, sem passar da vida máxima. | `calculateHeal` |
 | Roubo de vida | Um efeito de dano com `drain` cura quem bateu numa fração da vida que o alvo perdeu (o que o escudo segurou não conta). Ex.: `{ type: 'damage', power: 1.5, drain: 0.5 }`. | `applyEffect` |
+| Golpe de execução | Um efeito de dano com `perTargetMissingHp` bate mais forte em alvo ferido: para cada 1% da vida máxima que o alvo já perdeu, essa porcentagem a mais de dano (pontos inteiros; soma com os bônus das passivas). Ex.: `{ type: 'damage', power: 2.3, perTargetMissingHp: 1 }`, o Golpe Fatal do Ladino. Não entra no dano base da prévia, que não conhece o alvo. | `applyEffect`, `getMissingHpPercent` |
 | Golpes seguidos | Uma habilidade com vários efeitos de dano acerta várias vezes; cada golpe tem seu próprio crítico e eles param quando o alvo cai. | `data/characters.ts` |
 | Fúria | Depois do turno 8 o dano das habilidades cresce 50% por turno (turno 9: +50%, turno 10: +100%...), para toda batalha ter fim. Queimadura e veneno não aumentam. Na tela aparece como "Berserk +50%". | `constants.ts`, `getFuryBonus` |
 | Status | Efeitos que ficam na unidade por alguns turnos. Veja a seção abaixo. | `applyEffect`, `activateNext`, `endActivation` |
@@ -71,9 +72,10 @@ Uma habilidade aplica um status com um efeito do tipo `status`:
 | Status | O que faz | `power` |
 | --- | --- | --- |
 | `stun` | A unidade perde a vez. | não usa (0) |
-| `burn`, `poison` | Dano quando chega a vez da unidade. Ignora defesa e escudo. | dano = ATK de quem aplicou x power |
+| `burn`, `poison` | Dano quando chega a vez da unidade. Ignora defesa e escudo. Se quem aplicou tem a passiva `status_growth`, o dano cresce a cada turno (veja "Passivas"). | dano = ATK de quem aplicou x power |
 | `shield` | Absorve dano antes da vida. Some quando zera ou quando a duração acaba. | pontos = ATK de quem aplicou x power |
 | `atk_up`, `atk_down`, `def_up`, `def_down`, `speed_up`, `speed_down` | Aumenta ou reduz o atributo. Bônus e penalidades somam; o atributo nunca cai abaixo de 20%. | fração do atributo (0.3 = 30%) |
+| `passive_up` | A passiva de começo de vez de quem o carrega cura e causa dano mais forte. É o que a Bênção dá ao Clérigo: a Aura Restauradora cura 80% a mais nas duas vezes seguintes. | fração a mais (0.8 = 80%) |
 
 Regras de duração:
 
@@ -100,24 +102,33 @@ mostrada na carta e no painel da batalha. O campo `effect` diz o que ela faz:
 | `crit_chance_bonus` | Soma à chance de crítico. Também aceita `when`. | Ladino |
 | `ignore_defense` | Os golpes ignoram uma fração da defesa do alvo. | Espadachim |
 | `atk_from_def` | Os golpes somam ao ataque uma fração da defesa de quem bate. Cura e status não mudam. | Cavaleiro |
-| `lifesteal` | Todo golpe devolve como vida uma fração do dano que o alvo perdeu. Soma com o `drain` da habilidade. | Vampiro |
+| `lifesteal` | Todo golpe devolve como vida uma fração do dano que o alvo perdeu. Soma com o `drain` da habilidade. | ninguém, por enquanto |
+| `damage_per_drain` | Passiva que acumula cargas: cada vez que a unidade recupera vida com roubo de vida, ganha uma carga, e cada carga soma `amount` ao dano dos golpes dela até o fim da batalha (0.05 = +5%). Cura que não aconteceu (vida cheia) não conta. `max` limita as cargas. Elas ficam em `unit.passiveStacks`. | Vampiro |
+| `damage_per_missing_hp` | Quanto mais ferida a unidade, mais forte ela bate: para cada 1% da vida máxima perdida, `amount`% a mais de dano (amount 1 = 1% por 1%). Conta pontos inteiros de porcentagem e acompanha a vida: com cura, o bônus cai. | Bárbaro |
 | `energy_on_crit` | Um acerto crítico devolve energia ao time, até o máximo de 10 (pode passar da energia do turno). | Bárbaro |
-| `status_power` | Os status dos tipos listados que a unidade aplica valem mais (`amount`: 0.6 = +60%). | Guardião |
+| `status_on_hit` | Todo golpe da unidade também aplica um status no alvo (`status`, `turns`, `power`, `chance`, como no efeito de uma habilidade). É aplicado depois do dano, então não vale para o próprio golpe; se o alvo já tem o mesmo status mais forte, fica o mais forte. | Arqueiro |
+| `status_power` | Os status dos tipos listados que a unidade aplica valem mais (`amount`: 0.6 = +60%). | ninguém, por enquanto |
+| `status_growth` | O dano por turno dos status listados que a unidade aplica cresce com o tempo: o primeiro dano é o normal e cada turno seguinte soma `amount` do valor original (0.6: 100%, 160%, 220%...). O status guarda `growth` e `ticks` (quantas vezes já causou dano); o dano de agora é `getStatusTickDamage`. Renovar o status antes de ele acabar mantém a conta, mesmo que quem renove seja um aliado sem a passiva; se ele acabar, o próximo recomeça do normal. Depois de cada dano o motor emite `statuses_changed`. | Guardião |
 | `turn_start` | Age sozinha no começo da vez da unidade, se ela não estiver atordoada: aplica `effects` em `target`, como uma habilidade sem custo. `all-allies` (se só cura, pula quem está com a vida cheia) ou `fastest-enemy`. | Clérigo, Dríade |
+
+Uma passiva pode fazer mais de uma coisa: o efeito principal fica em `effect`
+e os outros em `also` (a do Arqueiro soma dano com condição e redução de
+defesa no golpe).
 
 Condições (`when`), sempre sobre o alvo do golpe: `target_has_status` (tem
 pelo menos um dos status), `target_hp_below` e `target_hp_above` (fração da
 vida máxima).
 
 As passivas do Clérigo e da Dríade eram habilidades ativas de 3 de energia
-(Luz Restauradora e Raízes Enredantes). Viraram versões mais fracas que
-acontecem a cada vez, sem custo.
+(Luz Restauradora e Raízes Enredantes). Viraram versões que acontecem a
+cada vez, sem custo.
 
 Para a tela, o motor emite `passive_triggered` quando uma passiva faz
 diferença: antes do dano que uma passiva com condição mudou (uma vez por
 ação) e antes dos efeitos de uma passiva de começo de vez. As que valem em
-todo golpe não avisam. `energy_gained` avisa que a energia de um time subiu
-no meio do turno.
+todo golpe não avisam. Numa passiva que acumula cargas, o aviso vem uma vez
+por ação, depois dos golpes, com `stacks` (quantas cargas ela tem agora).
+`energy_gained` avisa que a energia de um time subiu no meio do turno.
 
 A sequência de números aleatórios não depende das passivas: cada golpe gasta
 um sorteio de crítico, com ou sem bônus. Uma batalha gravada antes de as

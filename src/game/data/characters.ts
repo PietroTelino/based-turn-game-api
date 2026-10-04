@@ -14,9 +14,13 @@ import type { CharacterDefinition } from '../types';
  *   projéteis em área);
  * - `drain` num efeito de dano é roubo de vida: quem usa recupera essa fração
  *   do dano que o alvo perdeu;
+ * - `perTargetMissingHp` num efeito de dano é o golpe de execução: essa
+ *   porcentagem a mais de dano para cada 1% de vida que o alvo já perdeu;
  * - nos efeitos de status, `power` é o valor do status: ATK x power para
  *   queimadura, veneno e escudo; a fração do atributo para bônus e
- *   penalidades (0.3 = 30%); 0 para atordoamento;
+ *   penalidades (0.3 = 30%) e para `passive_up`, que fortalece a passiva de
+ *   começo de vez de quem o carrega (0.8 = 80% a mais de cura ou dano); 0
+ *   para atordoamento;
  * - todo personagem tem pelo menos uma passiva (`passives`), que ninguém usa:
  *   vale sozinha. A maioria deixa as habilidades do próprio personagem mais
  *   fortes; as de começo de vez (`turn_start`) agem por conta própria. Os
@@ -46,7 +50,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'piromante.bola-de-fogo',
                 name: 'Bola de Fogo',
                 description: 'Causa dano alto a um inimigo e o deixa queimando por 2 turnos.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'single-enemy',
                 element: 'fire',
                 ranged: true,
@@ -58,13 +62,14 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'piromante.chuva-de-meteoros',
                 name: 'Chuva de Meteoros',
-                description: 'Atinge todos os inimigos e reduz a defesa deles por 2 turnos.',
-                energyCost: 3,
+                description: 'Atinge todos os inimigos, reduz a defesa deles e os deixa queimando por 2 turnos.',
+                energyCost: 2,
                 target: 'all-enemies',
                 element: 'fire',
                 effects: [
                     { type: 'damage', power: 1.0 },
                     { type: 'status', status: 'def_down', turns: 2, power: 0.25 },
+                    { type: 'status', status: 'burn', turns: 2, power: 0.3 },
                 ],
             },
         ],
@@ -99,7 +104,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'cavaleiro.juramento-de-guarda',
                 name: 'Juramento de Guarda',
                 description: 'Protege um aliado com um escudo que absorve dano por 2 turnos.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'single-ally',
                 element: 'light',
                 effects: [
@@ -110,7 +115,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'cavaleiro.brado-de-guerra',
                 name: 'Brado de Guerra',
                 description: 'Atinge todos os inimigos e reduz o ataque deles por 2 turnos.',
-                energyCost: 3,
+                energyCost: 2,
                 target: 'all-enemies',
                 element: 'physical',
                 effects: [
@@ -151,7 +156,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'clerigo.toque-curativo',
                 name: 'Toque Curativo',
                 description: 'Recupera a vida de um aliado.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'single-ally',
                 element: 'light',
                 effects: [
@@ -161,13 +166,15 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'clerigo.bencao',
                 name: 'Bênção',
-                description: 'Aumenta a velocidade e o ataque de todos os aliados por 2 turnos.',
-                energyCost: 3,
+                description: 'Aumenta a velocidade e o ataque dos aliados por 2 turnos. Nesse tempo, a Aura Restauradora cura 80% a mais.',
+                energyCost: 2,
                 target: 'all-allies',
                 element: 'light',
                 effects: [
                     { type: 'status', status: 'speed_up', turns: 2, power: 0.3 },
                     { type: 'status', status: 'atk_up', turns: 2, power: 0.2 },
+                    // Fortalece a passiva do próprio Clérigo: as duas próximas curas da Aura Restauradora.
+                    { type: 'status', status: 'passive_up', turns: 2, power: 0.8, to: 'self' },
                 ],
             },
         ],
@@ -177,9 +184,9 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'clerigo.aura-restauradora',
                 name: 'Aura Restauradora',
-                description: 'No começo da vez do Clérigo, todos os aliados feridos recuperam vida igual a 20% do ataque dele.',
+                description: 'No começo da vez do Clérigo, os aliados feridos recuperam vida igual a 40% do ataque dele.',
                 element: 'light',
-                effect: { type: 'turn_start', target: 'all-allies', effects: [{ type: 'heal', power: 0.2 }] },
+                effect: { type: 'turn_start', target: 'all-allies', effects: [{ type: 'heal', power: 0.4 }] },
             },
         ],
     },
@@ -204,7 +211,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'barbaro.golpe-trovejante',
                 name: 'Golpe Trovejante',
                 description: 'Um golpe devastador, carregado de raios, com 30% de chance de atordoar o alvo.',
-                energyCost: 3,
+                energyCost: 2,
                 target: 'single-enemy',
                 element: 'lightning',
                 effects: [
@@ -220,6 +227,13 @@ export const CHARACTERS: CharacterDefinition[] = [
                 description: 'Quando o Bárbaro acerta um golpe crítico, o time recupera 2 de energia.',
                 element: 'lightning',
                 effect: { type: 'energy_on_crit', amount: 2 },
+            },
+            {
+                id: 'barbaro.sangue-quente',
+                name: 'Sangue Quente',
+                description: 'Para cada 1% de vida que o Bárbaro perdeu, os golpes dele causam 1% a mais de dano.',
+                element: 'lightning',
+                effect: { type: 'damage_per_missing_hp', amount: 1 },
             },
         ],
     },
@@ -245,7 +259,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'criomante.nevasca',
                 name: 'Nevasca',
                 description: 'Atinge todos os inimigos e os deixa mais lentos por 2 turnos.',
-                energyCost: 3,
+                energyCost: 2,
                 target: 'all-enemies',
                 element: 'ice',
                 effects: [
@@ -257,7 +271,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'criomante.prisao-de-gelo',
                 name: 'Prisão de Gelo',
                 description: 'Congela um inimigo: causa dano e o faz perder a próxima vez.',
-                energyCost: 3,
+                energyCost: 2,
                 target: 'single-enemy',
                 element: 'ice',
                 ranged: true,
@@ -298,7 +312,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'guardiao.esporos-venenosos',
                 name: 'Esporos Venenosos',
                 description: 'Causa dano e envenena o alvo por 3 turnos.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'single-enemy',
                 element: 'nature',
                 ranged: true,
@@ -311,7 +325,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'guardiao.seiva',
                 name: 'Seiva',
                 description: 'Recupera a própria vida e aumenta a própria defesa por 2 turnos.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'self',
                 element: 'nature',
                 effects: [
@@ -324,9 +338,9 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'guardiao.toxina-potente',
                 name: 'Toxina Potente',
-                description: 'O veneno que o Guardião aplica causa 60% a mais de dano por turno.',
+                description: 'O veneno do Guardião causa 60% a mais de dano a cada turno que o alvo segue envenenado. Se o veneno acabar, o próximo recomeça do normal.',
                 element: 'nature',
-                effect: { type: 'status_power', statuses: ['poison'], amount: 0.6 },
+                effect: { type: 'status_growth', statuses: ['poison'], amount: 0.6 },
             },
         ],
     },
@@ -352,7 +366,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'banshee.maldicao',
                 name: 'Maldição',
                 description: 'Causa dano a um inimigo e reduz a defesa dele por 2 turnos.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'single-enemy',
                 element: 'shadow',
                 ranged: true,
@@ -365,7 +379,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'banshee.grito-aterrador',
                 name: 'Grito Aterrador',
                 description: 'Atinge todos os inimigos, com 35% de chance de atordoar cada um.',
-                energyCost: 3,
+                energyCost: 2,
                 target: 'all-enemies',
                 element: 'shadow',
                 effects: [
@@ -405,7 +419,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'vampiro.mordida',
                 name: 'Mordida',
                 description: 'Morde um inimigo e recupera vida igual à metade do dano causado.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'single-enemy',
                 element: 'shadow',
                 effects: [
@@ -415,12 +429,12 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'vampiro.banquete-de-sangue',
                 name: 'Banquete de Sangue',
-                description: 'Atinge todos os inimigos e recupera vida igual a 30% do dano causado.',
-                energyCost: 3,
+                description: 'Atinge todos os inimigos e recupera vida igual à metade do dano causado.',
+                energyCost: 2,
                 target: 'all-enemies',
                 element: 'shadow',
                 effects: [
-                    { type: 'damage', power: 0.75, drain: 0.3 },
+                    { type: 'damage', power: 0.75, drain: 0.5 },
                 ],
             },
         ],
@@ -428,9 +442,9 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'vampiro.sede-de-sangue',
                 name: 'Sede de Sangue',
-                description: 'Todo golpe do Vampiro devolve a ele 30% do dano causado como vida, somando com o roubo de vida das habilidades.',
+                description: 'Cada cura que o Vampiro recebe do roubo de vida das habilidades aumenta o dano dele em 10% até o fim da batalha.',
                 element: 'shadow',
-                effect: { type: 'lifesteal', amount: 0.3 },
+                effect: { type: 'damage_per_drain', amount: 0.1 },
             },
         ],
     },
@@ -456,7 +470,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'driade.abraco-da-floresta',
                 name: 'Abraço da Floresta',
                 description: 'Recupera a vida de um aliado e aumenta a defesa dele por 2 turnos.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'single-ally',
                 element: 'nature',
                 effects: [
@@ -468,7 +482,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'driade.florescer',
                 name: 'Florescer',
                 description: 'Recupera a vida de todos os aliados e aumenta a defesa deles por 2 turnos.',
-                energyCost: 3,
+                energyCost: 2,
                 target: 'all-allies',
                 element: 'nature',
                 effects: [
@@ -479,19 +493,19 @@ export const CHARACTERS: CharacterDefinition[] = [
         ],
         passives: [
             // Era uma habilidade de 3 de energia (dano, lentidão e ataque menor num
-            // alvo escolhido): virou um golpe mais fraco que acontece sozinho a
-            // cada vez da Dríade, sempre no inimigo mais veloz.
+            // alvo escolhido): virou um golpe que acontece sozinho a cada vez da
+            // Dríade, sempre no inimigo mais veloz.
             {
                 id: 'driade.raizes-enredantes',
                 name: 'Raízes Enredantes',
-                description: 'No começo da vez da Dríade, raízes prendem o inimigo mais veloz: causam dano (30% do ataque dela) e reduzem a velocidade dele em 20% por 1 turno.',
+                description: 'No começo da vez da Dríade, raízes golpeiam o inimigo mais veloz (100% do ataque dela) e tiram 20% da velocidade dele por 1 turno.',
                 element: 'nature',
                 ranged: true,
                 effect: {
                     type: 'turn_start',
                     target: 'fastest-enemy',
                     effects: [
-                        { type: 'damage', power: 0.3 },
+                        { type: 'damage', power: 1.0 },
                         { type: 'status', status: 'speed_down', turns: 1, power: 0.2 },
                     ],
                 },
@@ -519,7 +533,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'ladino.lamina-envenenada',
                 name: 'Lâmina Envenenada',
                 description: 'Causa dano e envenena o alvo por 3 turnos.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'single-enemy',
                 element: 'nature',
                 effects: [
@@ -530,12 +544,12 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'ladino.golpe-fatal',
                 name: 'Golpe Fatal',
-                description: 'Um golpe certeiro que causa dano muito alto a um inimigo.',
-                energyCost: 3,
+                description: 'Dano muito alto em um inimigo. Para cada 1% de vida que o alvo já perdeu, causa 1% a mais.',
+                energyCost: 2,
                 target: 'single-enemy',
                 element: 'physical',
                 effects: [
-                    { type: 'damage', power: 2.3 },
+                    { type: 'damage', power: 2.3, perTargetMissingHp: 1 },
                 ],
             },
         ],
@@ -570,7 +584,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'espadachim.postura-de-duelo',
                 name: 'Postura de Duelo',
                 description: 'Aumenta o próprio ataque e a própria defesa por 2 turnos.',
-                energyCost: 2,
+                energyCost: 0,
                 target: 'self',
                 element: 'physical',
                 effects: [
@@ -582,7 +596,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'espadachim.danca-das-laminas',
                 name: 'Dança das Lâminas',
                 description: 'Três golpes rápidos no mesmo inimigo. Cada um pode ser crítico.',
-                energyCost: 3,
+                energyCost: 1,
                 target: 'single-enemy',
                 element: 'physical',
                 effects: [
@@ -624,7 +638,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'arqueiro.flecha-incapacitante',
                 name: 'Flecha Incapacitante',
                 description: 'Causa dano a um inimigo e reduz a velocidade dele por 2 turnos.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'single-enemy',
                 element: 'physical',
                 ranged: true,
@@ -637,7 +651,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'arqueiro.chuva-de-flechas',
                 name: 'Chuva de Flechas',
                 description: 'Dispara uma saraivada que atinge todos os inimigos.',
-                energyCost: 3,
+                energyCost: 2,
                 target: 'all-enemies',
                 element: 'physical',
                 ranged: true,
@@ -650,9 +664,10 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'arqueiro.olho-de-aguia',
                 name: 'Olho de Águia',
-                description: 'Os golpes do Arqueiro causam 25% a mais de dano em inimigos com mais de 70% da vida.',
+                description: 'Os golpes do Arqueiro causam 50% a mais em inimigos com mais de 70% da vida e tiram 20% da defesa do alvo por 2 turnos.',
                 element: 'physical',
-                effect: { type: 'damage_bonus', amount: 0.25, when: { type: 'target_hp_above', ratio: 0.7 } },
+                effect: { type: 'damage_bonus', amount: 0.5, when: { type: 'target_hp_above', ratio: 0.7 } },
+                also: [{ type: 'status_on_hit', status: 'def_down', turns: 2, power: 0.2 }],
             },
         ],
     },

@@ -19,6 +19,7 @@ import type {
     CharacterDefinition,
     PassiveCondition,
     PassiveDefinition,
+    PassiveEffect,
     SkillDefinition,
     SkillEffect,
     SkillPreview,
@@ -128,6 +129,11 @@ export function getPassives(unit: BattleUnit): PassiveDefinition[] {
     return unit.passives ?? [];
 }
 
+/** Todos os efeitos de passiva de uma unidade, um a um, cada qual com a passiva de que faz parte. */
+function getPassiveEffects(unit: BattleUnit): { passive: PassiveDefinition; effect: PassiveEffect }[] {
+    return getPassives(unit).flatMap((passive) => [passive.effect, ...(passive.also ?? [])].map((effect) => ({ passive, effect })));
+}
+
 function meets(condition: PassiveCondition | undefined, target: BattleUnit): boolean {
     if (!condition) {
         return true;
@@ -155,6 +161,8 @@ interface HitModifiers {
     lifesteal: number;
     /** Energia que o time recupera se o golpe for crítico. */
     energyOnCrit: number;
+    /** Status que o golpe também aplica no alvo, depois do dano. */
+    statusOnHit: StatusSkillEffect[];
     /** As passivas que só valeram por causa deste alvo: são as que a tela anuncia. */
     announced: PassiveDefinition[];
 }
@@ -165,11 +173,17 @@ interface HitModifiers {
  * que valem sempre.
  */
 function getHitModifiers(attacker: BattleUnit, target?: BattleUnit): HitModifiers {
-    const modifiers: HitModifiers = { damageBonus: 0, critChanceBonus: 0, ignoreDefense: 0, lifesteal: 0, energyOnCrit: 0, announced: [] };
+    const modifiers: HitModifiers = {
+        damageBonus: 0,
+        critChanceBonus: 0,
+        ignoreDefense: 0,
+        lifesteal: 0,
+        energyOnCrit: 0,
+        statusOnHit: [],
+        announced: [],
+    };
 
-    for (const passive of getPassives(attacker)) {
-        const { effect } = passive;
-
+    for (const { passive, effect } of getPassiveEffects(attacker)) {
         switch (effect.type) {
             case 'damage_bonus':
             case 'crit_chance_bonus': {
@@ -197,16 +211,46 @@ function getHitModifiers(attacker: BattleUnit, target?: BattleUnit): HitModifier
                 modifiers.energyOnCrit += effect.amount;
                 break;
 
+            case 'status_on_hit':
+                modifiers.statusOnHit.push({
+                    type: 'status',
+                    status: effect.status,
+                    turns: effect.turns,
+                    power: effect.power,
+                    ...(effect.chance !== undefined && { chance: effect.chance }),
+                });
+                break;
+
+            // Cada carga acumulada soma ao dano. Vale em todo golpe: entra na prévia e não é anunciada aqui.
+            case 'damage_per_drain':
+                modifiers.damageBonus += effect.amount * (attacker.passiveStacks ?? 0);
+                break;
+
+            // Quanto mais ferida, mais forte: 1 ponto de bônus por ponto inteiro
+            // de porcentagem da vida que falta.
+            case 'damage_per_missing_hp':
+                modifiers.damageBonus += (effect.amount * getMissingHpPercent(attacker)) / 100;
+                break;
+
             // Não mudam o golpe aqui: entram no ataque (getAttackStats), no
             // valor dos status ou no começo da vez.
             case 'atk_from_def':
             case 'status_power':
+            case 'status_growth':
             case 'turn_start':
                 break;
         }
     }
 
     return modifiers;
+}
+
+/**
+ * Quantos por cento da vida máxima a unidade já perdeu, em pontos inteiros
+ * (0 a 100). A conta é feita com inteiros para não escorregar no arredondamento.
+ */
+export function getMissingHpPercent(unit: BattleUnit): number {
+    return Math.max(0, Math.floor(((unit.stats.maxHp - unit.hp) * 100) / unit.stats.maxHp));
 }
 
 /**
@@ -218,7 +262,7 @@ export function getAttackStats(unit: BattleUnit): Stats {
     const stats = getEffectiveStats(unit);
     let atk = stats.atk;
 
-    for (const { effect } of getPassives(unit)) {
+    for (const { effect } of getPassiveEffects(unit)) {
         if (effect.type === 'atk_from_def') {
             atk += stats.def * effect.amount;
         }
@@ -320,6 +364,15 @@ export function calculateStatusValue(caster: Stats, effect: StatusSkillEffect): 
         default:
             return effect.power;
     }
+}
+
+/**
+ * Quanto um status de dano por turno causa na próxima vez de quem o carrega.
+ * Normalmente é o próprio valor; num status que cresce, o valor original mais
+ * `growth` dele para cada vez que já causou dano.
+ */
+export function getStatusTickDamage(status: StatusEffect): number {
+    return Math.max(1, Math.round(status.value * (1 + (status.growth ?? 0) * (status.ticks ?? 0))));
 }
 
 /** O que a unidade da vez pode fazer agora. */
@@ -473,6 +526,8 @@ export function applyAction(current: BattleState, action: BattleAction): BattleR
     });
 
     // 3. Aplicar os efeitos, na ordem em que aparecem na habilidade
+    const stacksBefore = actor.passiveStacks ?? 0;
+
     for (const effect of skill.effects) {
         const receivers = effect.type === 'status' && effect.to === 'self' ? [actor] : targets;
 
@@ -480,6 +535,8 @@ export function applyAction(current: BattleState, action: BattleAction): BattleR
             applyEffect(state, actor, receiver, effect, events);
         }
     }
+
+    announceStacks(actor, stacksBefore, events);
 
     // 4. Encerrar a vez de quem jogou
     endActivation(state, actor, events);
@@ -588,12 +645,14 @@ function applyEffect(
             // números aleatórios da batalha não depende de quem tem o quê.
             const critical = rollChance(state, actor.stats.critChance + modifiers.critChanceBonus);
             const defender = getEffectiveStats(target);
+            // Golpe de execução: quanto mais vida o alvo já perdeu, mais forte.
+            const executeBonus = ((effect.perTargetMissingHp ?? 0) * getMissingHpPercent(target)) / 100;
             const amount = calculateDamage(
                 getAttackStats(actor),
                 { ...defender, def: defender.def * Math.max(0, 1 - modifiers.ignoreDefense) },
                 effect.power,
                 critical,
-                getFuryMultiplier(state.turn) * (1 + modifiers.damageBonus),
+                getFuryMultiplier(state.turn) * (1 + modifiers.damageBonus + executeBonus),
             );
             const absorbed = absorbWithShield(target, amount);
             const lost = Math.min(target.hp, amount - absorbed);
@@ -627,6 +686,7 @@ function applyEffect(
                 if (healed > 0) {
                     actor.hp += healed;
                     events.push({ type: 'heal', sourceId: actor.id, targetId: actor.id, amount: healed, hp: actor.hp });
+                    gainDrainStack(actor);
                 }
             }
 
@@ -637,6 +697,18 @@ function applyEffect(
 
             if (!isAlive(target)) {
                 defeat(target, events);
+
+                return;
+            }
+
+            // Passiva de status no golpe: o alvo que ficou de pé recebe o
+            // status. Se já tem o mesmo status mais forte, fica o que tem.
+            for (const onHit of modifiers.statusOnHit) {
+                const current = target.statuses.find((status) => status.kind === onHit.status);
+
+                if (!current || current.value <= calculateStatusValue(getEffectiveStats(actor), onHit)) {
+                    applyEffect(state, actor, target, onHit, events);
+                }
             }
 
             return;
@@ -659,11 +731,18 @@ function applyEffect(
                 return;
             }
 
+            // Status que cresce: se o alvo já carrega o mesmo status crescendo,
+            // renovar não zera a conta (e o crescimento continua mesmo que quem
+            // renove não tenha a passiva).
+            const previous = target.statuses.find((s) => s.kind === effect.status);
+            const growth = Math.max(getStatusGrowth(actor, effect.status), previous?.growth ?? 0);
+
             const status: StatusEffect = {
                 kind: effect.status,
                 turns: effect.turns,
                 value: withStatusPower(actor, effect.status, calculateStatusValue(getEffectiveStats(actor), effect)),
                 sourceId: actor.id,
+                ...(growth > 0 && { growth, ticks: previous?.ticks ?? 0 }),
                 appliedOnStep: state.step,
             };
 
@@ -694,17 +773,58 @@ function announcePassive(unit: BattleUnit, passive: PassiveDefinition, targetIds
     }
 }
 
+/**
+ * A unidade recuperou vida com roubo de vida: se a passiva dela acumula
+ * cargas com isso, ganha uma (até o limite da passiva). A carga já vale para
+ * o próximo golpe, mesmo dentro da mesma habilidade.
+ */
+function gainDrainStack(unit: BattleUnit): void {
+    for (const { effect } of getPassiveEffects(unit)) {
+        if (effect.type === 'damage_per_drain') {
+            unit.passiveStacks = Math.min(effect.max ?? Infinity, (unit.passiveStacks ?? 0) + 1);
+        }
+    }
+}
+
+/** Avisa a tela, uma vez por ação, que a passiva de `unit` ganhou cargas e quantas ela tem agora. */
+function announceStacks(unit: BattleUnit, stacksBefore: number, events: BattleEvent[]): void {
+    const stacks = unit.passiveStacks ?? 0;
+
+    if (stacks === stacksBefore) {
+        return;
+    }
+
+    for (const { passive, effect } of getPassiveEffects(unit)) {
+        if (effect.type === 'damage_per_drain') {
+            events.push({ type: 'passive_triggered', unitId: unit.id, passiveId: passive.id, targetIds: [], stacks });
+        }
+    }
+}
+
 /** O valor de um status aplicado por `actor`, com o aumento que as passivas dele dão a esse tipo de status. */
 function withStatusPower(actor: BattleUnit, kind: StatusKind, value: number): number {
     let factor = 1;
 
-    for (const { effect } of getPassives(actor)) {
+    for (const { effect } of getPassiveEffects(actor)) {
         if (effect.type === 'status_power' && effect.statuses.includes(kind)) {
             factor += effect.amount;
         }
     }
 
     return factor === 1 ? value : Math.round(value * factor);
+}
+
+/** Quanto o dano por turno de um status aplicado por `actor` cresce a cada turno (0 = não cresce). */
+function getStatusGrowth(actor: BattleUnit, kind: StatusKind): number {
+    let growth = 0;
+
+    for (const { effect } of getPassiveEffects(actor)) {
+        if (effect.type === 'status_growth' && effect.statuses.includes(kind)) {
+            growth += effect.amount;
+        }
+    }
+
+    return growth;
 }
 
 /**
@@ -721,8 +841,8 @@ function gainEnergy(state: BattleState, unit: BattleUnit, amount: number, events
 
     state.energy[unit.team] += gained;
 
-    for (const passive of getPassives(unit)) {
-        if (passive.effect.type === 'energy_on_crit') {
+    for (const { passive, effect } of getPassiveEffects(unit)) {
+        if (effect.type === 'energy_on_crit') {
             announcePassive(unit, passive, [], events);
         }
     }
@@ -737,11 +857,13 @@ function gainEnergy(state: BattleState, unit: BattleUnit, amount: number, events
  * - all-allies: os aliados vivos. Se a passiva só cura, quem está com a vida
  *   cheia fica de fora (e, se ninguém precisa, ela nem é anunciada).
  * - fastest-enemy: o inimigo vivo mais veloz agora.
+ *
+ * Se a unidade carrega o status passive_up, a cura e o dano da passiva saem
+ * mais fortes (o valor do status é a fração: 0.8 = 80% a mais). Os status que
+ * a passiva aplica não mudam.
  */
 function applyTurnStartPassives(state: BattleState, unit: BattleUnit, events: BattleEvent[]): void {
-    for (const passive of getPassives(unit)) {
-        const { effect } = passive;
-
+    for (const { passive, effect } of getPassiveEffects(unit)) {
         if (effect.type !== 'turn_start' || !isAlive(unit)) {
             continue;
         }
@@ -762,9 +884,13 @@ function applyTurnStartPassives(state: BattleState, unit: BattleUnit, events: Ba
 
         events.push({ type: 'passive_triggered', unitId: unit.id, passiveId: passive.id, targetIds: targets.map((target) => target.id) });
 
+        const boost = 1 + (getStatuses(unit).find((status) => status.kind === 'passive_up')?.value ?? 0);
+
         for (const item of effect.effects) {
+            const boosted = item.type === 'status' ? item : { ...item, power: item.power * boost };
+
             for (const target of item.type === 'status' && item.to === 'self' ? [unit] : targets) {
-                applyEffect(state, unit, target, item, events);
+                applyEffect(state, unit, target, boosted, events);
             }
         }
     }
@@ -970,14 +1096,20 @@ function activateNext(state: BattleState, events: BattleEvent[]): void {
     throw new Error('Vezes demais foram puladas em sequência');
 }
 
-/** Queimadura e veneno: dano direto na vida, sem passar por defesa nem escudo. */
+/**
+ * Queimadura e veneno: dano direto na vida, sem passar por defesa nem escudo.
+ * Um status que cresce conta mais uma vez depois de causar dano, e a tela é
+ * avisada para mostrar quanto ele vai causar na próxima.
+ */
 function applyDamageOverTime(unit: BattleUnit, events: BattleEvent[]): void {
+    let grew = false;
+
     for (const status of getStatuses(unit)) {
         if (status.kind !== 'burn' && status.kind !== 'poison') {
             continue;
         }
 
-        const amount = Math.min(unit.hp, status.value);
+        const amount = Math.min(unit.hp, getStatusTickDamage(status));
 
         unit.hp -= amount;
         events.push({ type: 'status_damage', targetId: unit.id, status: status.kind, amount, hp: unit.hp });
@@ -986,6 +1118,15 @@ function applyDamageOverTime(unit: BattleUnit, events: BattleEvent[]): void {
             defeat(unit, events);
             return;
         }
+
+        if (status.growth) {
+            unit.statuses = unit.statuses.map((item) => (item === status ? { ...status, ticks: (status.ticks ?? 0) + 1 } : item));
+            grew = true;
+        }
+    }
+
+    if (grew) {
+        pushStatusesChanged(unit, events);
     }
 }
 

@@ -75,7 +75,8 @@ describe('BattleService: criar batalha', () => {
             skillId: 'barbaro.golpe-trovejante',
             targetIds: ['A1'],
             team: 'B',
-            energy: 0,
+            // 3 de energia no turno 1, menos os 2 do Golpe Trovejante.
+            energy: 1,
         });
     });
 
