@@ -132,7 +132,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'cavaleiro.brado-de-guerra',
                 name: 'Brado de Guerra',
                 description: 'Provoca os inimigos por 2 turnos: os golpes de alvo único deles só podem mirar no Cavaleiro. Também reduz o ataque deles.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'all-enemies',
                 element: 'physical',
                 effects: [
@@ -229,13 +229,13 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'barbaro.golpe-trovejante',
                 name: 'Golpe Trovejante',
-                description: 'Um golpe devastador, carregado de raios, com 30% de chance de atordoar o alvo.',
-                energyCost: 2,
+                description: 'Um golpe devastador, carregado de raios, com 40% de chance de atordoar o alvo.',
+                energyCost: 1,
                 target: 'single-enemy',
                 element: 'lightning',
                 effects: [
                     { type: 'damage', power: 1.9 },
-                    { type: 'status', status: 'stun', turns: 1, power: 0, chance: 0.3 },
+                    { type: 'status', status: 'stun', turns: 1, power: 0, chance: 0.4 },
                 ],
             },
         ],
@@ -319,31 +319,19 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'guardiao.raizes',
                 name: 'Raízes',
-                description: 'Golpeia um inimigo com as raízes.',
+                description: 'Golpeia um inimigo e o envenena por 3 turnos.',
                 energyCost: 0,
                 target: 'single-enemy',
                 element: 'nature',
                 effects: [
                     { type: 'damage', power: 1.0 },
-                ],
-            },
-            {
-                id: 'guardiao.esporos-venenosos',
-                name: 'Esporos Venenosos',
-                description: 'Causa dano e envenena o alvo por 3 turnos.',
-                energyCost: 1,
-                target: 'single-enemy',
-                element: 'nature',
-                ranged: true,
-                effects: [
-                    { type: 'damage', power: 0.8 },
                     { type: 'status', status: 'poison', turns: 3, power: 0.55 },
                 ],
             },
             {
                 id: 'guardiao.seiva',
                 name: 'Seiva',
-                description: 'Recupera a própria vida e aumenta a própria defesa por 2 turnos.',
+                description: 'Recupera a própria vida e aumenta a defesa por 2 turnos.',
                 energyCost: 1,
                 target: 'self',
                 element: 'nature',
@@ -357,9 +345,21 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'guardiao.toxina-potente',
                 name: 'Toxina Potente',
-                description: 'O veneno do Guardião causa 60% a mais de dano a cada turno que o alvo segue envenenado. Se o veneno acabar, o próximo recomeça do normal.',
+                description: 'O veneno dele fica 60% mais forte a cada turno no mesmo alvo. Se acabar, recomeça do normal.',
                 element: 'nature',
                 effect: { type: 'status_growth', statuses: ['poison'], amount: 0.6 },
+            },
+            {
+                // Era a habilidade Esporos Venenosos: o veneno foi para o ataque
+                // básico e para esta abertura, que pega o time inimigo inteiro.
+                // O veneno daqui é fraco (15% do ataque) porque cai em cinco
+                // alvos de uma vez e ainda cresce com a Toxina Potente: com os
+                // 55% das Raízes o Guardião vencia 75% das batalhas no relatório.
+                id: 'guardiao.nuvem-de-esporos',
+                name: 'Nuvem de Esporos',
+                description: 'No começo da batalha, envenena todos os inimigos por 3 turnos (15% do ataque por turno).',
+                element: 'nature',
+                effect: { type: 'battle_start', target: 'all-enemies', effects: [{ type: 'status', status: 'poison', turns: 3, power: 0.15 }] },
             },
         ],
     },
@@ -536,36 +536,26 @@ export const CHARACTERS: CharacterDefinition[] = [
         id: 'ladino',
         name: 'Ladino',
         role: 'assassin',
-        stats: { maxHp: 680, atk: 200, def: 30, speed: 140, critChance: 0.35, critDamage: 1.8 },
+        stats: { maxHp: 680, atk: 200, def: 30, speed: 100, critChance: 0.35, critDamage: 1.8 },
         skills: [
             {
                 id: 'ladino.punhalada',
                 name: 'Punhalada',
-                description: 'Golpeia um inimigo com a adaga.',
+                description: 'Golpeia um inimigo, que sangra por 2 turnos.',
                 energyCost: 0,
                 target: 'single-enemy',
                 element: 'physical',
                 effects: [
                     { type: 'damage', power: 1.0 },
-                ],
-            },
-            {
-                id: 'ladino.lamina-envenenada',
-                name: 'Lâmina Envenenada',
-                description: 'Causa dano e envenena o alvo por 3 turnos.',
-                energyCost: 1,
-                target: 'single-enemy',
-                element: 'nature',
-                effects: [
-                    { type: 'damage', power: 1.0 },
-                    { type: 'status', status: 'poison', turns: 3, power: 0.45 },
+                    // O mesmo sangramento do lobo do Druida: 30% do ataque por turno.
+                    { type: 'status', status: 'bleed', turns: 2, power: 0.3 },
                 ],
             },
             {
                 id: 'ladino.golpe-fatal',
                 name: 'Golpe Fatal',
-                description: 'Dano muito alto em um inimigo. Para cada 1% de vida que o alvo já perdeu, causa 1% a mais.',
-                energyCost: 2,
+                description: 'Dano muito alto: 1% a mais para cada 1% de vida que o alvo perdeu.',
+                energyCost: 1,
                 target: 'single-enemy',
                 element: 'physical',
                 effects: [
@@ -577,9 +567,16 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'ladino.ponto-fraco',
                 name: 'Ponto Fraco',
-                description: 'O Ladino tem 25% a mais de chance de crítico contra inimigos com algum efeito negativo.',
+                description: '25% a mais de chance de crítico contra inimigos com efeito negativo.',
                 element: 'physical',
                 effect: { type: 'crit_chance_bonus', amount: 0.25, when: { type: 'target_has_status', statuses: ['burn', 'poison', 'bleed', 'heal_down', 'stun', 'atk_down', 'def_down', 'speed_down'] } },
+            },
+            {
+                id: 'ladino.nas-sombras',
+                name: 'Nas Sombras',
+                description: 'Começa cada turno escondido: não pode ser alvo até agir ou levar dano. Golpes em área acertam.',
+                element: 'shadow',
+                effect: { type: 'stealth_each_turn' },
             },
         ],
     },
@@ -603,13 +600,15 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'espadachim.postura-de-duelo',
                 name: 'Postura de Duelo',
-                description: 'Aumenta o próprio ataque e a própria defesa por 2 turnos.',
+                description: 'Por 2 turnos, aumenta o próprio ataque e a defesa e contra-ataca com a Estocada todo golpe que levar.',
                 energyCost: 0,
                 target: 'self',
                 element: 'physical',
                 effects: [
                     { type: 'status', status: 'atk_up', turns: 2, power: 0.3 },
                     { type: 'status', status: 'def_up', turns: 2, power: 0.3 },
+                    // Enquanto a postura dura, todo golpe que ele leva é revidado com o ataque básico.
+                    { type: 'status', status: 'counter', turns: 2, power: 0 },
                 ],
             },
             {
@@ -840,9 +839,11 @@ export const CHARACTERS: CharacterDefinition[] = [
                     {
                         id: 'druida.presas-afiadas',
                         name: 'Presas Afiadas',
-                        description: 'Todo golpe do lobo faz o alvo sangrar por 2 turnos: dano por turno igual a 30% do ataque dele.',
+                        description: 'Todo golpe do lobo faz o alvo sangrar por 2 turnos (30% do ataque por turno). Ele causa 10% a mais de dano para cada inimigo com sangramento.',
                         element: 'physical',
                         effect: { type: 'status_on_hit', status: 'bleed', turns: 2, power: 0.3 },
+                        // O cheiro de sangue: conta os inimigos sangrando na hora de cada golpe.
+                        also: [{ type: 'damage_per_enemy_status', statuses: ['bleed'], amount: 0.1 }],
                     },
                 ],
             },

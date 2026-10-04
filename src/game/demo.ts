@@ -29,6 +29,8 @@ const STATUS_NAMES: Record<StatusKind, string> = {
     taunt: 'provocação',
     bleed: 'sangramento',
     heal_down: 'cura reduzida',
+    stealth: 'furtividade',
+    counter: 'contra-ataque',
     form: 'transformação',
 };
 
@@ -53,6 +55,9 @@ function describe(state: BattleState, event: BattleEvent): string | null {
             const cost = skill && skill.energyCost > 0 ? ` (-${skill.energyCost} de energia)` : '';
             return `  usa ${skill?.name ?? event.skillId}${cost}`;
         }
+
+        case 'counter_attack':
+            return `  ${label(event.unitId)} contra-ataca ${label(event.targetIds[0] ?? '')}`;
 
         case 'damage': {
             const target = getUnit(state, event.targetId);

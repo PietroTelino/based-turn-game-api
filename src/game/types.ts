@@ -48,6 +48,10 @@ export type TargetType = 'single-enemy' | 'all-enemies' | 'single-ally' | 'all-a
  *   Golpes em área e passivas que escolhem o alvo sozinhas não mudam.
  * - heal_down: a unidade recebe menos cura, em uma fração (0.6 = 60% a menos).
  *   Vale para toda cura: habilidades, passivas e roubo de vida.
+ * - stealth: a unidade está escondida. As habilidades de alvo único dos
+ *   inimigos não podem mirar nela (a não ser que todos os inimigos vivos
+ *   estejam escondidos); golpes em área e passivas que escolhem o alvo
+ *   sozinhas acertam normalmente. Acaba quando ela age ou leva dano.
  * - form: a unidade está transformada (ver FormDefinition). Quando o status
  *   acaba, ela volta à forma original.
  */
@@ -66,6 +70,8 @@ export type StatusKind =
     | 'taunt'
     | 'bleed'
     | 'heal_down'
+    | 'stealth'
+    | 'counter'
     | 'form';
 
 /** Um status ativo em uma unidade. */
@@ -79,7 +85,7 @@ export interface StatusEffect {
     /**
      * O significado depende do tipo: dano por turno (burn, poison), pontos
      * restantes (shield) ou fração (modificadores de atributo, passive_up e heal_down).
-     * Zero no stun, no taunt e no form.
+     * Zero no stun, no taunt, no stealth, no counter e no form.
      */
     value: number;
     sourceId: string;
@@ -218,6 +224,20 @@ export type PassiveCondition =
  * 'transform' de uma habilidade dela), a vez não acaba: ela age de novo, já
  * na forma nova. A vez da transformação conta como um dos turnos da forma.
  *
+ * stealth_each_turn: no começo de cada turno a unidade fica escondida (status
+ * `stealth`) até agir ou levar dano. Enquanto isso, os inimigos não podem
+ * escolhê-la como alvo.
+ *
+ * damage_per_enemy_status: os golpes causam `amount` a mais de dano para cada
+ * inimigo vivo que carrega algum dos `statuses` (0.1 com 'bleed' = +10% por
+ * inimigo sangrando). A conta é feita uma vez por golpe, antes dele: num
+ * golpe em área todos os alvos levam o mesmo bônus; numa habilidade de
+ * vários golpes, cada golpe conta de novo.
+ *
+ * battle_start: age uma vez só, quando a batalha começa, antes da vez de
+ * qualquer unidade: aplica os `effects` em todos os inimigos, como uma
+ * habilidade em área sem custo.
+ *
  * count_corpses: a passiva conta os cadáveres do time (aliados derrotados que
  * ainda não foram erguidos). O número fica em `unit.passiveStacks` e é só uma
  * conta para a tela mostrar: quem usa os cadáveres é o efeito 'summon'.
@@ -236,10 +256,13 @@ export type PassiveEffect =
     | { type: 'status_on_hit'; status: StatusKind; turns: number; power: number; chance?: number }
     | { type: 'damage_per_drain'; amount: number; max?: number }
     | { type: 'damage_per_missing_hp'; amount: number }
+    | { type: 'damage_per_enemy_status'; statuses: StatusKind[]; amount: number }
     | { type: 'status_power'; statuses: StatusKind[]; amount: number }
     | { type: 'status_growth'; statuses: StatusKind[]; amount: number }
     | { type: 'extra_action_on_transform' }
     | { type: 'count_corpses' }
+    | { type: 'stealth_each_turn' }
+    | { type: 'battle_start'; target: 'all-enemies'; effects: SkillEffect[] }
     | { type: 'turn_start'; target: 'all-allies' | 'fastest-enemy'; effects: SkillEffect[] };
 
 export interface PassiveDefinition {
@@ -409,6 +432,13 @@ export type BattleEvent =
     /** Chegou a vez de uma unidade. */
     | { type: 'unit_activated'; unitId: string; team: TeamId }
     | { type: 'skill_used'; unitId: string; skillId: string; targetIds: string[]; team: TeamId; energy: number }
+    /**
+     * Contra-ataque: `unitId` carrega o status `counter`, foi atingida por um
+     * golpe e revida com o ataque básico (`skillId`) em `targetIds[0]`: quem
+     * bateu ou, se há um inimigo provocando, quem provoca. É fora da vez e
+     * sem gastar energia. Os eventos do golpe vêm logo depois.
+     */
+    | { type: 'counter_attack'; unitId: string; skillId: string; targetIds: string[] }
     /** `amount` é o dano total do golpe; `absorbed` é a parte que o escudo segurou. */
     | { type: 'damage'; sourceId: string; targetId: string; amount: number; absorbed: number; critical: boolean; hp: number }
     | { type: 'heal'; sourceId: string; targetId: string; amount: number; hp: number }

@@ -272,6 +272,74 @@ describe('formas: o lobo e o sangramento', () => {
         assert.deepEqual(getUnit(after, 'B1').statuses.map((status) => status.kind), ['poison', 'burn', 'bleed']);
     });
 
+    it('o lobo causa 10% a mais de dano para cada inimigo sangrando', () => {
+        const bleed = { kind: 'bleed' as const, turns: 2, value: 65, sourceId: 'A1', appliedOnStep: 0 };
+        const bite = (bleeding: string[]) => {
+            const state = wolf(3);
+
+            for (const unitId of bleeding) getUnit(state, unitId).statuses = [bleed];
+
+            return eventsOfType(use(state, 'mordida', 'B1').events, 'damage')[0]?.amount;
+        };
+
+        // ATK 215 x 100 / (100 + 90 de defesa) = 113; com um, dois e três sangrando, 10%, 20% e 30% a mais.
+        assert.deepEqual([bite([]), bite(['B2']), bite(['B2', 'B3']), bite(['B1', 'B2', 'B3'])], [113, 124, 136, 147]);
+
+        // Só os inimigos contam: o próprio lobo sangrando não soma nada.
+        const selfBleeding = wolf(3);
+
+        getUnit(selfBleeding, 'A1').statuses = [...getUnit(selfBleeding, 'A1').statuses, bleed];
+
+        assert.equal(eventsOfType(use(selfBleeding, 'mordida', 'B1').events, 'damage')[0]?.amount, 113);
+    });
+
+    it('o bônus é contado uma vez por golpe: no Frenesi todos levam o mesmo', () => {
+        const fresh = use(wolf(3), 'frenesi');
+
+        // 215 x 0,9 x 100 / 190 = 102 em todos: ninguém sangrava, e o sangramento que o próprio Frenesi causa não conta para ele.
+        assert.deepEqual(eventsOfType(fresh.events, 'damage').map((event) => [event.targetId, event.amount]), [['B1', 102], ['B2', 102], ['B3', 102]]);
+
+        // Com um inimigo já sangrando antes do golpe, os três levam os mesmos 10% a mais.
+        const state = wolf(3);
+
+        getUnit(state, 'B3').statuses = [{ kind: 'bleed', turns: 2, value: 65, sourceId: 'A1', appliedOnStep: 0 }];
+
+        assert.deepEqual(eventsOfType(use(state, 'frenesi').events, 'damage').map((event) => event.amount), [112, 112, 112]);
+    });
+
+    it('no Dilacerar, o segundo golpe já ganha o bônus pelo sangramento que o primeiro causou', () => {
+        const first = use(wolf(1), 'dilacerar', 'B1');
+
+        // 215 x 0,85 x 100 / 190 = 96 no primeiro; o alvo sai sangrando e o segundo leva 10% a mais (106).
+        assert.deepEqual(eventsOfType(first.events, 'damage').filter((event) => event.sourceId === 'A1').map((event) => event.amount), [96, 106]);
+
+        // Com outro inimigo já sangrando antes, são 10% no primeiro e 20% no segundo.
+        const two = wolf(2);
+
+        getUnit(two, 'B2').statuses = [{ kind: 'bleed', turns: 2, value: 65, sourceId: 'A1', appliedOnStep: 0 }];
+
+        assert.deepEqual(eventsOfType(use(two, 'dilacerar', 'B1').events, 'damage').filter((event) => event.sourceId === 'A1').map((event) => event.amount), [106, 115]);
+
+        const again = untilDruid(first.state);
+
+        getUnit(again, 'A1').stats.critChance = 0;
+
+        // Agora o alvo sangra: a Mordida sai com 10% a mais (113 vira 124).
+        assert.equal(eventsOfType(use(again, 'mordida', 'B1').events, 'damage')[0]?.amount, 124);
+    });
+
+    it('o bônus pelos inimigos sangrando aparece no dano previsto das habilidades do lobo', () => {
+        const state = wolf(3);
+        const before = getAvailableActions(state).find((option) => option.skill.id === 'druida.mordida')?.preview.damage;
+
+        getUnit(state, 'B1').statuses = [{ kind: 'bleed', turns: 2, value: 65, sourceId: 'A1', appliedOnStep: 0 }];
+        getUnit(state, 'B2').statuses = [{ kind: 'bleed', turns: 2, value: 65, sourceId: 'A1', appliedOnStep: 0 }];
+
+        const after = getAvailableActions(state).find((option) => option.skill.id === 'druida.mordida')?.preview.damage;
+
+        assert.deepEqual([before, after], [215, 258]);
+    });
+
     it('a purificação tira o sangramento', () => {
         const state = createBattle({ teamA: [getCharacter('sacerdote'), getCharacter('cavaleiro')], teamB: [druida], seed: 1 }).state;
 

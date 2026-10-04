@@ -75,8 +75,8 @@ describe('BattleService: criar batalha', () => {
             skillId: 'barbaro.golpe-trovejante',
             targetIds: ['A1'],
             team: 'B',
-            // 3 de energia no turno 1, menos os 2 do Golpe Trovejante.
-            energy: 1,
+            // 3 de energia no turno 1, menos 1 do Golpe Trovejante.
+            energy: 2,
         });
     });
 
@@ -350,7 +350,7 @@ describe('BattleService: jogar', () => {
 
 describe('BattleService: batalha de treino (tutorial)', () => {
     const TRAINING_TEAM = ['cavaleiro', 'barbaro', 'piromante', 'arqueiro', 'sacerdote'];
-    const TRAINING_ENEMY = ['guardiao', 'vampiro', 'espadachim', 'criomante', 'driade'];
+    const TRAINING_ENEMY = ['banshee', 'vampiro', 'espadachim', 'criomante', 'driade'];
 
     it('a marca de treino vai no estado, chega à tela e continua lá depois de cada jogada', async () => {
         const { store, service } = setup(TEAM_SIZE);

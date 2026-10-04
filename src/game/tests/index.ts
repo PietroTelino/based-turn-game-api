@@ -7,5 +7,6 @@ import './engine.test';
 import './forms.test';
 import './summons.test';
 import './statuses.test';
+import './counter.test';
 import './passives.test';
 import './ai.test';

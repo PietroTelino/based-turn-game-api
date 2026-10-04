@@ -96,16 +96,19 @@ describe('catálogo de personagens', () => {
             // Os números que precisam aparecer no texto, conforme o tipo do efeito.
             const numbers: string[] = [];
 
-            if (effect.type === 'extra_action_on_transform' || effect.type === 'count_corpses') {
-                // Sem número: a passiva só diz o que acontece (age de novo, conta os cadáveres).
+            if (effect.type === 'extra_action_on_transform' || effect.type === 'count_corpses' || effect.type === 'stealth_each_turn') {
+                // Sem número: a passiva só diz o que acontece (age de novo, conta os cadáveres, se esconde).
             } else if (effect.type === 'energy_on_crit') {
                 numbers.push(`${effect.amount} de energia`);
+            } else if (effect.type === 'damage_per_enemy_status') {
+                // "N% a mais de dano para cada inimigo com o status."
+                numbers.push(`${percent(effect.amount)} a mais`, 'para cada inimigo');
             } else if (effect.type === 'damage_per_missing_hp') {
                 // "Para cada 1% de vida perdida, N% a mais."
                 numbers.push(`${effect.amount}% a mais`);
             } else if (effect.type === 'status_on_hit') {
                 numbers.push(percent(effect.power), `${effect.turns} turno`);
-            } else if (effect.type === 'turn_start') {
+            } else if (effect.type === 'turn_start' || effect.type === 'battle_start') {
                 for (const item of effect.effects) {
                     if (item.type === 'cleanse' || item.type === 'transform' || item.type === 'summon') continue;
 
@@ -161,6 +164,16 @@ describe('catálogo de personagens', () => {
                 assert.ok(skill.description.includes(`${effect.turns} turno`), skill.id);
             }
         }
+    });
+
+    it('os ajustes de custo: o Golpe Trovejante e o Brado de Guerra custam 1, e o atordoamento do Bárbaro tem 40% de chance', () => {
+        const thunder = getCharacter('barbaro').skills.find((skill) => skill.id === 'barbaro.golpe-trovejante');
+        const stun = thunder?.effects.find((effect) => effect.type === 'status' && effect.status === 'stun');
+
+        assert.equal(thunder?.energyCost, 1);
+        assert.equal(stun?.type === 'status' ? stun.chance : undefined, 0.4);
+        assert.match(thunder?.description ?? '', /40%/);
+        assert.equal(getCharacter('cavaleiro').skills.find((skill) => skill.id === 'cavaleiro.brado-de-guerra')?.energyCost, 1);
     });
 
     it('ninguém tem mais de três habilidades ativas: a quarta virou passiva', () => {
@@ -271,7 +284,7 @@ describe('IA', () => {
         assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'barbaro.golpe-trovejante', targetId: 'B1' });
     });
 
-    it('dá o escudo ao aliado mais ferido que ainda não tem um', () => {
+    it('com duas habilidades de mesmo custo, o tanque provoca primeiro; já provocando, dá o escudo ao aliado mais ferido que ainda não tem um', () => {
         const { state } = createBattle({
             teamA: [getCharacter('cavaleiro'), getCharacter('guardiao'), getCharacter('criomante')],
             teamB: [getCharacter('cavaleiro')],
@@ -279,13 +292,20 @@ describe('IA', () => {
         });
 
         state.activeUnitId = 'A1';
-        // Energia só para o Juramento de Guarda (1): o Brado de Guerra (2) fica de fora.
-        state.energy.A = 1;
         getUnit(state, 'A2').hp = 600;
         getUnit(state, 'A3').hp = 600;
         getUnit(state, 'A3').statuses = [{ kind: 'shield', turns: 2, value: 100, sourceId: 'A1', appliedOnStep: 0 }];
 
-        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'cavaleiro.juramento-de-guarda', targetId: 'A2' });
+        // O Juramento de Guarda e o Brado de Guerra custam 1: o Brado (provocação) ganha o empate.
+        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'cavaleiro.brado-de-guerra' });
+
+        // Com a provocação de pé e o inimigo já enfraquecido, o Brado não acrescenta nada.
+        const taunting = applyAction(state, { unitId: 'A1', skillId: 'cavaleiro.brado-de-guerra' }).state;
+
+        taunting.activeUnitId = 'A1';
+        taunting.energy.A = 1;
+
+        assert.deepEqual(chooseAction(taunting), { unitId: 'A1', skillId: 'cavaleiro.juramento-de-guarda', targetId: 'A2' });
     });
 
     it('sem ninguém ferido, ataca o inimigo com menos vida', () => {
@@ -333,7 +353,7 @@ describe('IA', () => {
     it('de treino: perde para um jogador que só usa o ataque básico', () => {
         // É a batalha do tutorial (os times ficam em src/battle/tutorial.ts, no app).
         const player = ['cavaleiro', 'barbaro', 'piromante', 'arqueiro', 'sacerdote'].map(getCharacter);
-        const enemy = ['guardiao', 'vampiro', 'espadachim', 'criomante', 'driade'].map(getCharacter);
+        const enemy = ['banshee', 'vampiro', 'espadachim', 'criomante', 'driade'].map(getCharacter);
 
         for (const seed of [1, 2, 3, 4, 5]) {
             let { state } = createBattle({ teamA: player, teamB: enemy, seed });

@@ -116,7 +116,13 @@ describe('rotas /api/rooms', () => {
         const asBruno = await call('GET', `/battles/${battleId}/events?after=0`, { token: bruno });
 
         assert.deepEqual([asAna.body.mode, asAna.body.playerTeam, asBruno.body.battle.playerTeam], ['pvp', 'A', 'B']);
-        assert.deepEqual(asBruno.body.events.map((e: any) => e.type), ['turn_started', 'unit_activated']);
+        // O time do Bruno tem o Ladino, que começa o turno escondido: a abertura avisa os status dele.
+        // Depois vem a Nuvem de Esporos do Guardião da Ana, que envenena os cinco do Bruno.
+        const opening: string[] = asBruno.body.events.map((e: any) => e.type);
+
+        assert.deepEqual(opening.slice(0, 3), ['turn_started', 'statuses_changed', 'passive_triggered']);
+        assert.equal(opening.filter((type) => type === 'status_applied').length, 5);
+        assert.equal(opening[opening.length - 1], 'unit_activated');
         assert.equal((await call('GET', `/battles/${battleId}`, { token: caio })).status, 404);
 
         // Joga quem está na vez; o outro vê a jogada pedindo o que veio depois do que já viu.
@@ -129,7 +135,7 @@ describe('rotas /api/rooms', () => {
             token: mover.token,
             body: { unitId: active, skillId: action.skill.id, targetId: target.id },
         });
-        const watched = await call('GET', `/battles/${battleId}/events?after=2`, { token: watcher });
+        const watched = await call('GET', `/battles/${battleId}/events?after=${asBruno.body.events.length}`, { token: watcher });
 
         assert.equal(played.status, 200);
         assert.deepEqual(watched.body.events, played.body.events);

@@ -564,3 +564,237 @@ describe('catálogo: provocação e purificação', () => {
         }
     });
 });
+
+describe('status: furtividade', () => {
+    const hide: PassiveDefinition = { id: 'rogue.hide', name: 'hide', description: '', effect: { type: 'stealth_each_turn' } };
+    const blast = statusSkill('b.blast', [{ type: 'damage', power: 1 }], 'all-enemies');
+    const mend = statusSkill('a.mend', [{ type: 'heal', power: 1 }], 'single-ally');
+
+    /**
+     * A1 (veloz), B1 (com um golpe em área) e A2, o furtivo (lento): a ordem de
+     * cada turno é A1, B1, A2. O furtivo tem pouca vida de propósito: seria o
+     * alvo preferido de qualquer um.
+     */
+    function setup() {
+        return createBattle({
+            teamA: [makeCharacter('a', { speed: 200, maxHp: 100_000 }, [mend]), makeCharacter('rogue', { speed: 50, maxHp: 5_000 }, [], [hide])],
+            teamB: [makeCharacter('b', { speed: 100, maxHp: 100_000 }, [blast])],
+            seed: 1,
+        }).state;
+    }
+
+    function targetsOf(state: BattleState, skillId: string): string[] {
+        return getAvailableActions(state).find((option) => option.skill.id === skillId)?.targetIds ?? [];
+    }
+
+    function isHidden(state: BattleState, unitId = 'A2'): boolean {
+        return getUnit(state, unitId).statuses.some((item) => item.kind === 'stealth');
+    }
+
+    it('quem tem a passiva começa a batalha escondido, e a tela recebe a lista de status', () => {
+        const { state, events } = createBattle({
+            teamA: [makeCharacter('a', { speed: 200 }), makeCharacter('rogue', { speed: 50 }, [], [hide])],
+            teamB: [makeCharacter('b', { speed: 100 })],
+            seed: 1,
+        });
+
+        assert.ok(isHidden(state));
+        assert.equal(isHidden(state, 'A1'), false);
+
+        const started = events.findIndex((event) => event.type === 'turn_started');
+        const next = events[started + 1];
+
+        assert.equal(next?.type, 'statuses_changed');
+        assert.equal(next?.type === 'statuses_changed' ? next.unitId : '', 'A2');
+    });
+
+    it('os inimigos não podem escolher como alvo quem está escondido', () => {
+        const state = basicAttackTurn(setup()).state;
+
+        assert.equal(state.activeUnitId, 'B1');
+        assert.deepEqual(targetsOf(state, 'b.basic'), ['A1']);
+        assertRuleError(() => applyAction(state, { unitId: 'B1', skillId: 'b.basic', targetId: 'A2' }), 'INVALID_TARGET');
+    });
+
+    it('golpe em área acerta quem está escondido, e o dano o revela', () => {
+        const state = basicAttackTurn(setup()).state;
+
+        assert.deepEqual(targetsOf(state, 'b.blast'), ['A1', 'A2']);
+
+        const { state: after, events } = applyAction(state, { unitId: 'B1', skillId: 'b.blast' });
+
+        assert.deepEqual(eventsOfType(events, 'damage').map((event) => event.targetId), ['A1', 'A2']);
+        assert.ok(eventsOfType(events, 'status_expired').some((event) => event.unitId === 'A2' && event.status === 'stealth'));
+        assert.equal(isHidden(after), false);
+    });
+
+    it('quem age sai do esconderijo, e depois disso pode ser alvo até o fim do turno', () => {
+        // A1 e B1 jogam; chega a vez do furtivo.
+        let state = basicAttackTurn(setup()).state;
+
+        state = applyAction(state, { unitId: 'B1', skillId: 'b.basic', targetId: 'A1' }).state;
+        assert.equal(state.activeUnitId, 'A2');
+        assert.ok(isHidden(state));
+
+        const { events } = applyAction(state, { unitId: 'A2', skillId: 'rogue.basic', targetId: 'B1' });
+        const types = events.map((event) => event.type);
+
+        // Ele se revela ao agir, antes do golpe.
+        assert.ok(types.indexOf('status_expired') > types.indexOf('skill_used'));
+        assert.ok(types.indexOf('status_expired') < types.indexOf('damage'));
+    });
+
+    it('todo turno a furtividade volta', () => {
+        let state = setup();
+        const hiddenAtB1: boolean[] = [];
+
+        for (let turn = 0; turn < 3; turn++) {
+            state = playUntilTurnOf(state, 'B1').state;
+            hiddenAtB1.push(isHidden(state));
+            // B1 revela o furtivo com o golpe em área; no turno seguinte ele está escondido de novo.
+            state = applyAction(state, { unitId: 'B1', skillId: 'b.blast' }).state;
+            assert.equal(isHidden(state), false);
+            state = playUntilTurnOf(state, 'A1').state;
+        }
+
+        assert.deepEqual(hiddenAtB1, [true, true, true]);
+    });
+
+    it('quem agiu fica visível até o turno acabar e some de novo no turno seguinte', () => {
+        // O furtivo é o mais veloz: age primeiro e passa o resto do turno à mostra.
+        const state = createBattle({
+            teamA: [makeCharacter('rogue', { speed: 200, maxHp: 5_000 }, [], [hide]), makeCharacter('a', { speed: 50, maxHp: 100_000 })],
+            teamB: [makeCharacter('b', { speed: 100, maxHp: 100_000 })],
+            seed: 1,
+        }).state;
+
+        const acted = applyAction(state, { unitId: 'A1', skillId: 'rogue.basic', targetId: 'B1' }).state;
+
+        assert.equal(acted.activeUnitId, 'B1');
+        assert.deepEqual(targetsOf(acted, 'b.basic'), ['A1', 'A2']);
+
+        // B1 e A2 jogam: começa o turno 2, com o furtivo escondido de novo.
+        const next = playUntilTurnOf(basicAttackTurn(basicAttackTurn(acted).state).state, 'A1').state;
+
+        assert.equal(next.turn, 2);
+        assert.ok(isHidden(next, 'A1'));
+    });
+
+    it('se todos os inimigos vivos estão escondidos, eles podem ser alvo', () => {
+        const state = basicAttackTurn(setup()).state;
+
+        getUnit(state, 'A1').hp = 0;
+
+        assert.deepEqual(targetsOf(state, 'b.basic'), ['A2']);
+    });
+
+    it('os aliados podem escolher quem está escondido (cura, bônus)', () => {
+        const state = setup();
+
+        getUnit(state, 'A2').hp = 100;
+
+        assert.deepEqual(targetsOf(state, 'a.mend'), ['A1', 'A2']);
+
+        const { state: after } = applyAction(state, { unitId: 'A1', skillId: 'a.mend', targetId: 'A2' });
+
+        assert.equal(getUnit(after, 'A2').hp, 200);
+        assert.ok(isHidden(after), 'cura não revela');
+    });
+
+    it('a passiva que escolhe o alvo sozinha acerta quem está escondido e o revela', () => {
+        const roots: PassiveDefinition = {
+            id: 'b.roots',
+            name: 'roots',
+            description: '',
+            effect: { type: 'turn_start', target: 'fastest-enemy', effects: [{ type: 'damage', power: 1 }] },
+        };
+        // O furtivo é o inimigo mais veloz de B1, mas B1 age antes dele.
+        const state = createBattle({
+            teamA: [makeCharacter('rogue', { speed: 150, maxHp: 5_000 }, [], [hide]), makeCharacter('a', { speed: 50, maxHp: 100_000 })],
+            teamB: [makeCharacter('b', { speed: 200, maxHp: 100_000 }, [], [roots])],
+            seed: 1,
+        });
+
+        assert.equal(state.state.activeUnitId, 'B1');
+        assert.equal(eventsOfType(state.events, 'passive_triggered')[0]?.targetIds[0], 'A1');
+        assert.equal(eventsOfType(state.events, 'damage')[0]?.targetId, 'A1');
+        assert.equal(isHidden(state.state, 'A1'), false);
+    });
+
+    it('dano de veneno ou queimadura também revela', () => {
+        const state = basicAttackTurn(setup()).state;
+
+        getUnit(state, 'A2').statuses.push(status('poison', { value: 10 }));
+
+        const { state: after, events } = applyAction(state, { unitId: 'B1', skillId: 'b.basic', targetId: 'A1' });
+
+        // Chegou a vez do furtivo: o veneno bateu e ele apareceu.
+        assert.equal(after.activeUnitId, 'A2');
+        assert.equal(eventsOfType(events, 'status_damage')[0]?.targetId, 'A2');
+        assert.equal(isHidden(after), false);
+    });
+
+    it('atordoado, ele fica escondido até a vez perdida passar', () => {
+        const state = basicAttackTurn(setup()).state;
+
+        getUnit(state, 'A2').statuses.push(status('stun', { turns: 1 }));
+
+        const { state: after, events } = applyAction(state, { unitId: 'B1', skillId: 'b.basic', targetId: 'A1' });
+
+        assert.equal(eventsOfType(events, 'unit_skipped')[0]?.unitId, 'A2');
+        assert.equal(after.turn, 2, 'a vez perdida fechou o turno');
+        assert.ok(isHidden(after), 'e no turno novo ele está escondido de novo');
+    });
+
+    it('a purificação não tira a furtividade', () => {
+        assert.ok(!NEGATIVE_STATUSES.includes('stealth'));
+    });
+});
+
+describe('catálogo: Ladino', () => {
+    const ladino = getCharacter('ladino');
+
+    it('tem 100 de velocidade, duas habilidades (sem a Lâmina Envenenada) e a passiva Nas Sombras', () => {
+        assert.equal(ladino.stats.speed, 100);
+        assert.deepEqual(ladino.skills.map((item) => item.id), ['ladino.punhalada', 'ladino.golpe-fatal']);
+        assert.deepEqual(ladino.passives.map((item) => item.id), ['ladino.ponto-fraco', 'ladino.nas-sombras']);
+    });
+
+    it('a Punhalada não tem custo e faz o alvo sangrar por 2 turnos; o Golpe Fatal custa 1', () => {
+        const state = createBattle({ teamA: [ladino], teamB: [getCharacter('cavaleiro')], seed: 1 }).state;
+
+        assert.equal(state.activeUnitId, 'A1');
+
+        const { state: after, events } = applyAction(state, { unitId: 'A1', skillId: 'ladino.punhalada', targetId: 'B1' });
+
+        // ATK 200 x 0,3 = 60 de sangramento por turno.
+        assert.deepEqual(
+            eventsOfType(events, 'status_applied').map((event) => [event.targetId, event.status, event.turns, event.value]),
+            [['B1', 'bleed', 2, 60]],
+        );
+        assert.equal(eventsOfType(events, 'status_damage')[0]?.amount, 60, 'o sangramento já bate na vez do alvo');
+        assert.equal(after.energy.A, state.energy.A, 'o ataque básico não gasta energia');
+        assert.deepEqual(ladino.skills.map((item) => item.energyCost), [0, 1]);
+    });
+
+    it('começa escondido, e a IA inimiga bate em outro alvo mesmo com ele sendo o mais frágil', () => {
+        const { state } = createBattle({ teamA: [getCharacter('barbaro')], teamB: [getCharacter('cavaleiro'), ladino], seed: 1 });
+
+        assert.equal(state.activeUnitId, 'A1');
+        assert.ok(getUnit(state, 'B2').statuses.some((item) => item.kind === 'stealth'));
+        // O Ladino (680 de vida) seria o alvo: escondido, sobra o Cavaleiro (1300).
+        assert.equal(chooseAction(state).targetId, 'B1');
+    });
+
+    it('uma batalha inteira com Ladinos dos dois lados termina', () => {
+        const team = ['ladino', 'cavaleiro', 'sacerdote'].map(getCharacter);
+        let state = createBattle({ teamA: team, teamB: team, seed: 5 }).state;
+
+        for (let i = 0; state.winner === null; i++) {
+            assert.ok(i < 3000, 'a batalha não terminou');
+            state = applyAction(state, chooseAction(state)).state;
+        }
+
+        assert.ok(state.winner === 'A' || state.winner === 'B');
+    });
+});

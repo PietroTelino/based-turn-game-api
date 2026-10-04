@@ -21,9 +21,11 @@ import type { AvailableAction, BattleAction, BattleState, BattleUnit } from './t
  * 3. senão, quem pode erguer um cadáver ergue (uma unidade a mais no time
  *    vale mais que qualquer golpe); e quem pode se transformar se transforma: na forma mais resistente
  *    se está com menos da metade da vida, na de mais ataque se está bem;
- * 4. senão, usa a habilidade mais cara que a energia do time permite,
- *    pulando as de suporte (escudo, bônus) que não acrescentariam nada
- *    porque os alvos já estão com o efeito;
+ *    quem tem uma postura sem custo (um bônus em si mesma, como a Postura
+ *    de Duelo) entra nela sempre que não está;
+ * 4. senão, usa a habilidade mais cara que a energia do time permite (no
+ *    empate, a provocação primeiro), pulando as de suporte (escudo, bônus)
+ *    que não acrescentariam nada porque os alvos já estão com o efeito;
  * 5. ataques miram em quem tem menos vida; suporte vai para o aliado mais
  *    ferido que ainda não tem o efeito. Se um inimigo está provocando, o
  *    motor só oferece ele como alvo dos golpes de alvo único.
@@ -32,6 +34,11 @@ import type { AvailableAction, BattleAction, BattleState, BattleUnit } from './t
  * Para o motor, IA e jogador são a mesma coisa: alguém que manda uma BattleAction.
  */
 export function chooseAction(state: BattleState): BattleAction {
+    return decide(state, true);
+}
+
+/** `useStance`: se a unidade pode gastar a vez entrando em postura (a IA de treino não faz isso). */
+function decide(state: BattleState, useStance: boolean): BattleAction {
     if (state.activeUnitId === null) {
         throw new Error('A batalha já terminou');
     }
@@ -64,7 +71,21 @@ export function chooseAction(state: BattleState): BattleAction {
         return shift;
     }
 
-    const byCost = options.filter((option) => !isHeal(option)).sort((a, b) => b.skill.energyCost - a.skill.energyCost);
+    // Postura: um bônus em si mesma que não custa energia (a Postura de Duelo)
+    // vale a vez sempre que a unidade ainda não o carrega.
+    const stance = options.find(
+        (option) => option.skill.energyCost === 0 && option.skill.target === 'self' && isSupport(option) && lacksStatus(option, actor, actor),
+    );
+
+    if (stance && useStance) {
+        return toAction(actor.id, stance, undefined);
+    }
+
+    // No empate de custo, a provocação vem antes: sem isso o tanque gastaria a
+    // energia sempre no escudo e nunca chamaria os golpes para si.
+    const byCost = options
+        .filter((option) => !isHeal(option))
+        .sort((a, b) => b.skill.energyCost - a.skill.energyCost || Number(isTaunt(b)) - Number(isTaunt(a)));
 
     for (const option of byCost) {
         if (!isSupport(option)) {
@@ -95,7 +116,8 @@ export function chooseAction(state: BattleState): BattleAction {
  *    turno está intacta, a unidade da vez escolhe como a IA normal; depois
  *    que alguém gastou, as outras ficam no ataque básico;
  * 2. os golpes miram em quem tem MAIS vida, em vez de terminar com os
- *    feridos: o dano se espalha e quase ninguém cai.
+ *    feridos: o dano se espalha e quase ninguém cai;
+ * 3. ela não entra em postura: o Espadachim de treino nunca contra-ataca.
  *
  * Também não tem sorteio: a mesma batalha de treino se repete igual.
  */
@@ -106,7 +128,7 @@ export function chooseTrainingAction(state: BattleState): BattleAction {
 
     const actor = getUnit(state, state.activeUnitId);
     const options = getAvailableActions(state).filter((option) => option.usable);
-    const normal = chooseAction(state);
+    const normal = decide(state, false);
     const hasSpent = state.energy[actor.team] < state.turnEnergy;
 
     let option = options.find((candidate) => candidate.skill.id === normal.skillId);
@@ -194,6 +216,10 @@ function chooseForm(actor: BattleUnit, options: AvailableAction[]): BattleAction
     }
 
     return best ? toAction(actor.id, best.option, actor.id) : null;
+}
+
+function isTaunt(option: AvailableAction): boolean {
+    return option.skill.effects.some((effect) => effect.type === 'status' && effect.status === 'taunt');
 }
 
 /** Habilidade que não causa dano nem cura: só aplica status. */

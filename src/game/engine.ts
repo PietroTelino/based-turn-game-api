@@ -198,9 +198,9 @@ interface HitModifiers {
 /**
  * Junta o que as passivas de `attacker` fazem num golpe. Com `target`, conta
  * também as que dependem do alvo; sem ele (na prévia da habilidade), só as
- * que valem sempre.
+ * que valem sempre. `state` é para as que olham o campo inteiro.
  */
-function getHitModifiers(attacker: BattleUnit, target?: BattleUnit): HitModifiers {
+function getHitModifiers(state: BattleState, attacker: BattleUnit, target?: BattleUnit, fieldBonus?: number): HitModifiers {
     const modifiers: HitModifiers = {
         damageBonus: 0,
         critChanceBonus: 0,
@@ -260,6 +260,12 @@ function getHitModifiers(attacker: BattleUnit, target?: BattleUnit): HitModifier
                 modifiers.damageBonus += (effect.amount * getMissingHpPercent(attacker)) / 100;
                 break;
 
+            // Um tanto a mais para cada inimigo vivo com o status (os que
+            // sangram, para o lobo). Vale em todo golpe e entra na prévia; é
+            // somado no fim, porque a conta é uma só para o golpe inteiro.
+            case 'damage_per_enemy_status':
+                break;
+
             // Não mudam o golpe aqui: entram no ataque (getAttackStats), no
             // valor dos status ou no começo da vez.
             case 'atk_from_def':
@@ -267,12 +273,42 @@ function getHitModifiers(attacker: BattleUnit, target?: BattleUnit): HitModifier
             case 'status_growth':
             case 'extra_action_on_transform':
             case 'count_corpses':
+            case 'stealth_each_turn':
+            case 'battle_start':
             case 'turn_start':
                 break;
         }
     }
 
+    // O bônus que depende do campo: o que foi contado antes do golpe
+    // (`fieldBonus`) ou, na prévia, o de agora.
+    modifiers.damageBonus += fieldBonus ?? getEnemyStatusBonus(state, attacker);
+
     return modifiers;
+}
+
+/**
+ * Quanto as passivas `damage_per_enemy_status` de `unit` somam ao dano agora.
+ * A conta é feita UMA vez por golpe (por efeito de dano da habilidade), antes
+ * dele: num golpe em área todos os alvos levam o mesmo bônus, e o status que
+ * o golpe aplica só conta a partir do golpe seguinte. Numa habilidade de
+ * vários golpes (o Dilacerar), o segundo já conta o que o primeiro causou.
+ */
+function getEnemyStatusBonus(state: BattleState, unit: BattleUnit): number {
+    let bonus = 0;
+
+    for (const { effect } of getPassiveEffects(unit)) {
+        if (effect.type === 'damage_per_enemy_status') {
+            bonus += effect.amount * countEnemiesWithStatus(state, unit, effect.statuses);
+        }
+    }
+
+    return bonus;
+}
+
+/** Quantos inimigos vivos de `unit` carregam pelo menos um dos status. */
+export function countEnemiesWithStatus(state: BattleState, unit: BattleUnit, statuses: StatusKind[]): number {
+    return state.units.filter((enemy) => enemy.team !== unit.team && isAlive(enemy) && statuses.some((kind) => hasStatus(enemy, kind))).length;
 }
 
 /**
@@ -436,7 +472,7 @@ export function getAvailableActions(state: BattleState): AvailableAction[] {
 export function previewSkill(state: BattleState, actor: BattleUnit, skill: SkillDefinition): SkillPreview {
     const stats = getEffectiveStats(actor);
     // Só as passivas que valem em qualquer golpe: as que dependem do alvo não entram na prévia.
-    const multiplier = getFuryMultiplier(state.turn) * (1 + getHitModifiers(actor).damageBonus);
+    const multiplier = getFuryMultiplier(state.turn) * (1 + getHitModifiers(state, actor).damageBonus);
     let damage: number | null = null;
     let heal: number | null = null;
 
@@ -573,6 +609,9 @@ export function applyAction(current: BattleState, action: BattleAction): BattleR
         energy: state.energy[actor.team],
     });
 
+    // Quem age sai do esconderijo antes do golpe.
+    reveal(actor, events);
+
     // 3. Aplicar os efeitos, na ordem em que aparecem na habilidade
     const stacksBefore = actor.passiveStacks ?? 0;
     // A passiva de ação extra é a da forma em que a unidade está ANTES de se transformar.
@@ -581,13 +620,18 @@ export function applyAction(current: BattleState, action: BattleAction): BattleR
 
     for (const effect of skill.effects) {
         const receivers = effect.type === 'status' && effect.to === 'self' ? [actor] : targets;
+        // Contado uma vez por golpe, antes dele: em área, vale igual para todos os alvos.
+        const fieldBonus = getEnemyStatusBonus(state, actor);
 
         for (const receiver of receivers) {
-            applyEffect(state, actor, receiver, effect, events);
+            applyEffect(state, actor, receiver, effect, events, fieldBonus);
         }
     }
 
     announceStacks(actor, stacksBefore, events);
+
+    // Quem levou o golpe e está pronto para revidar (status counter) contra-ataca agora.
+    applyCounterAttacks(state, actor, events, 0);
 
     // Ação extra: quem se transformou agora (e tem a passiva) não encerra a
     // vez. Passa a valer uma "vez" nova da mesma unidade (o relógio anda, para
@@ -645,13 +689,21 @@ function requiresTarget(skill: SkillDefinition): boolean {
 /**
  * Todas as unidades que a habilidade PODE atingir (apenas vivas).
  *
- * Provocação: se algum inimigo está provocando, as habilidades de alvo único
- * só podem mirar em quem provoca. Golpes em área continuam pegando todos.
+ * Furtividade: um inimigo escondido não pode ser escolhido como alvo de uma
+ * habilidade de alvo único, a não ser que todos os inimigos vivos estejam
+ * escondidos (senão não haveria em quem bater).
+ *
+ * Provocação: se algum inimigo (dos que podem ser alvo) está provocando, as
+ * habilidades de alvo único só podem mirar em quem provoca.
+ *
+ * Golpes em área continuam pegando todos, escondidos ou não.
  */
 function getCandidateTargets(state: BattleState, actor: BattleUnit, skill: SkillDefinition): BattleUnit[] {
     switch (skill.target) {
         case 'single-enemy': {
-            const enemies = state.units.filter((u) => u.team !== actor.team && isAlive(u));
+            const alive = state.units.filter((u) => u.team !== actor.team && isAlive(u));
+            const visible = alive.filter((u) => !hasStatus(u, 'stealth'));
+            const enemies = visible.length > 0 ? visible : alive;
             const taunting = enemies.filter((u) => hasStatus(u, 'taunt'));
 
             return taunting.length > 0 ? taunting : enemies;
@@ -701,6 +753,8 @@ function applyEffect(
     target: BattleUnit,
     effect: SkillEffect,
     events: BattleEvent[],
+    /** O bônus de dano que depende do campo, contado antes deste golpe (veja getEnemyStatusBonus). */
+    fieldBonus?: number,
 ): void {
     // Erguer um cadáver é o único efeito que age sobre uma unidade derrotada.
     if (effect.type === 'summon') {
@@ -716,7 +770,7 @@ function applyEffect(
 
     switch (effect.type) {
         case 'damage': {
-            const modifiers = getHitModifiers(actor, target);
+            const modifiers = getHitModifiers(state, actor, target, fieldBonus);
 
             // Uma passiva que só valeu por causa do alvo é anunciada antes do
             // dano que ela mudou, uma vez por ação.
@@ -750,6 +804,11 @@ function applyEffect(
                 critical,
                 hp: target.hp,
             });
+
+            // Levar um golpe (em área, ou de uma passiva que escolhe o alvo sozinha) revela quem estava escondido.
+            if (isAlive(target)) {
+                reveal(target, events);
+            }
 
             if (absorbed > 0) {
                 if (!hasStatus(target, 'shield')) {
@@ -1092,15 +1151,136 @@ function applyTurnStartPassives(state: BattleState, unit: BattleUnit, events: Ba
             continue;
         }
 
+        const from = events.length;
+
         events.push({ type: 'passive_triggered', unitId: unit.id, passiveId: passive.id, targetIds: targets.map((target) => target.id) });
 
         const boost = 1 + (getStatuses(unit).find((status) => status.kind === 'passive_up')?.value ?? 0);
 
         for (const item of effect.effects) {
             const boosted = item.type === 'damage' || item.type === 'heal' ? { ...item, power: item.power * boost } : item;
+            const fieldBonus = getEnemyStatusBonus(state, unit);
 
             for (const target of item.type === 'status' && item.to === 'self' ? [unit] : targets) {
-                applyEffect(state, unit, target, boosted, events);
+                applyEffect(state, unit, target, boosted, events, fieldBonus);
+            }
+        }
+
+        // O golpe de uma passiva também é um golpe: quem o levou pode revidar.
+        applyCounterAttacks(state, unit, events, from);
+    }
+}
+
+/**
+ * Contra-ataque (status counter): depois que `attacker` termina um golpe, cada
+ * inimigo que levou dano dele e carrega o status revida com o próprio ataque
+ * básico, fora da vez e sem gastar energia.
+ *
+ * - Vale para dano de golpe: de habilidade (em um alvo ou em área) e de
+ *   passiva que bate sozinha. Dano de status (veneno, queimadura,
+ *   sangramento) não tem quem revidar e não conta.
+ * - Um revide por golpe recebido, mesmo que a habilidade bata várias vezes.
+ * - Quem está atordoado ou foi derrotado pelo golpe não revida.
+ * - O revide não provoca outro revide (senão dois em postura nunca parariam).
+ * - O revide é um ataque básico, então obedece à provocação: se um inimigo
+ *   está provocando, o revide vai nele, e não em quem bateu (se quem bateu é
+ *   um dos que provocam, vai nele mesmo). Sem provocação, vai em quem bateu.
+ *
+ * `from` é a posição, em `events`, a partir da qual estão os eventos do golpe.
+ */
+function applyCounterAttacks(state: BattleState, attacker: BattleUnit, events: BattleEvent[], from: number): void {
+    const hitIds: string[] = [];
+
+    for (const event of events.slice(from)) {
+        if (event.type === 'damage' && event.sourceId === attacker.id && !hitIds.includes(event.targetId)) {
+            hitIds.push(event.targetId);
+        }
+    }
+
+    for (const unitId of hitIds) {
+        const unit = getUnit(state, unitId);
+        const basic = unit.skills[0];
+
+        if (!basic || unit.team === attacker.team || !isAlive(unit) || !hasStatus(unit, 'counter') || hasStatus(unit, 'stun')) {
+            continue;
+        }
+
+        // Quem provoca puxa o revide para si. Quem bateu pode já ter caído
+        // para o revide de outro: aí só há revide se alguém estiver provocando.
+        const taunting = state.units.filter((enemy) => enemy.team !== unit.team && isAlive(enemy) && hasStatus(enemy, 'taunt'));
+        const target = taunting.length === 0 || taunting.includes(attacker) ? attacker : taunting[0];
+
+        if (!target || !isAlive(target)) {
+            continue;
+        }
+
+        const stacksBefore = unit.passiveStacks ?? 0;
+
+        events.push({ type: 'counter_attack', unitId: unit.id, skillId: basic.id, targetIds: [target.id] });
+
+        for (const effect of basic.effects) {
+            applyEffect(state, unit, effect.type === 'status' && effect.to === 'self' ? unit : target, effect, events, getEnemyStatusBonus(state, unit));
+        }
+
+        announceStacks(unit, stacksBefore, events);
+    }
+}
+
+/** Tira a unidade do esconderijo (status stealth), se ela estava escondida, e avisa a tela. */
+function reveal(unit: BattleUnit, events: BattleEvent[]): void {
+    if (!hasStatus(unit, 'stealth')) {
+        return;
+    }
+
+    unit.statuses = unit.statuses.filter((status) => status.kind !== 'stealth');
+    events.push({ type: 'status_expired', unitId: unit.id, status: 'stealth' });
+    pushStatusesChanged(unit, events);
+}
+
+/**
+ * Começo de turno: quem tem a passiva stealth_each_turn se esconde de novo.
+ * O status dura até a unidade agir (ou perder a vez) ou levar dano.
+ */
+function applyTurnStealth(state: BattleState, events: BattleEvent[]): void {
+    for (const unit of state.units) {
+        if (!isAlive(unit) || !getPassiveEffects(unit).some(({ effect }) => effect.type === 'stealth_each_turn')) {
+            continue;
+        }
+
+        unit.statuses = [
+            ...getStatuses(unit).filter((status) => status.kind !== 'stealth'),
+            { kind: 'stealth', turns: 1, value: 0, sourceId: unit.id, appliedOnStep: state.step },
+        ];
+        pushStatusesChanged(unit, events);
+    }
+}
+
+/**
+ * As passivas de começo de batalha (battle_start): cada unidade que tem uma
+ * aplica os efeitos dela em todos os inimigos, na ordem de ação do primeiro
+ * turno. Acontece uma vez só, antes da primeira vez da batalha.
+ */
+function applyBattleStartPassives(state: BattleState, events: BattleEvent[]): void {
+    for (const unitId of state.order) {
+        const unit = getUnit(state, unitId);
+
+        for (const { passive, effect } of getPassiveEffects(unit)) {
+            if (effect.type !== 'battle_start' || !isAlive(unit)) {
+                continue;
+            }
+
+            const targets = state.units.filter((enemy) => enemy.team !== unit.team && isAlive(enemy));
+
+            if (targets.length === 0) {
+                continue;
+            }
+
+            events.push({ type: 'passive_triggered', unitId: unit.id, passiveId: passive.id, targetIds: targets.map((target) => target.id) });
+
+            for (const item of effect.effects) {
+                for (const target of item.type === 'status' && item.to === 'self' ? [unit] : targets) {
+                    applyEffect(state, unit, target, item, events);
+                }
             }
         }
     }
@@ -1206,6 +1386,13 @@ function startTurn(state: BattleState, events: BattleEvent[]): void {
         energy: state.turnEnergy,
         fury: getFuryBonus(state.turn),
     });
+
+    applyTurnStealth(state, events);
+
+    // Só no primeiro turno: as passivas de começo de batalha, antes da vez de qualquer unidade.
+    if (state.turn === 1) {
+        applyBattleStartPassives(state, events);
+    }
 }
 
 /** Mais veloz primeiro; com a mesma velocidade, quem tirou o menor número no sorteio do turno. */
@@ -1300,6 +1487,11 @@ function activateNext(state: BattleState, events: BattleEvent[]): void {
             return;
         }
 
+        // ...ou a própria unidade pode ter caído para o contra-ataque de quem a passiva atingiu.
+        if (!isAlive(unit)) {
+            continue;
+        }
+
         // ...ou mudado a velocidade de quem ainda não agiu neste turno.
         reorderWaiting(state, events);
 
@@ -1316,6 +1508,7 @@ function activateNext(state: BattleState, events: BattleEvent[]): void {
  */
 function applyDamageOverTime(state: BattleState, unit: BattleUnit, events: BattleEvent[]): void {
     let grew = false;
+    let revealed = false;
 
     for (const status of getStatuses(unit)) {
         if (!DAMAGE_STATUSES.includes(status.kind)) {
@@ -1332,6 +1525,9 @@ function applyDamageOverTime(state: BattleState, unit: BattleUnit, events: Battl
             return;
         }
 
+        // Dano de status também revela quem estava escondido.
+        revealed = true;
+
         if (status.growth) {
             unit.statuses = unit.statuses.map((item) => (item === status ? { ...status, ticks: (status.ticks ?? 0) + 1 } : item));
             grew = true;
@@ -1340,6 +1536,10 @@ function applyDamageOverTime(state: BattleState, unit: BattleUnit, events: Battl
 
     if (grew) {
         pushStatusesChanged(unit, events);
+    }
+
+    if (revealed) {
+        reveal(unit, events);
     }
 }
 

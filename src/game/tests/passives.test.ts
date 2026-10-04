@@ -818,23 +818,66 @@ describe('passivas do catálogo', () => {
         assert.ok(getUnit(state, 'B2').statuses.some((item) => item.kind === 'def_down'), 'a redução de defesa continua');
     });
 
-    it('Guardião: o veneno começa normal e fica 60% mais forte a cada turno que o alvo segue envenenado', () => {
+    it('Guardião: a Nuvem de Esporos envenena todos os inimigos no começo da batalha, uma vez só, e esse veneno também cresce', () => {
+        const opening = createBattle({
+            teamA: [getCharacter('guardiao')],
+            teamB: [getCharacter('cavaleiro'), getCharacter('ladino'), getCharacter('sacerdote')],
+            seed: 1,
+        });
+        const cloud = eventsOfType(opening.events, 'passive_triggered').filter((event) => event.passiveId === 'guardiao.nuvem-de-esporos');
+        const poisons = eventsOfType(opening.events, 'status_applied').filter((event) => event.status === 'poison');
+
+        // ATK 190 x 0,15 = 29 por turno, em todos: o Ladino escondido não escapa (não é golpe de alvo único).
+        assert.deepEqual(cloud.map((event) => [event.unitId, event.targetIds]), [['A1', ['B1', 'B2', 'B3']]]);
+        assert.deepEqual(poisons.map((event) => [event.targetId, event.turns, event.value]), [['B1', 3, 29], ['B2', 3, 29], ['B3', 3, 29]]);
+        assert.ok(getUnit(opening.state, 'B2').statuses.some((item) => item.kind === 'stealth'), 'ser envenenado não revela: só o dano revela');
+
+        // O Guardião bate sempre no Cavaleiro (B1); o Sacerdote (B3) fica só com o veneno da abertura.
+        let result = { state: opening.state, events: opening.events };
+        // O Sacerdote é o primeiro da fila: o primeiro dano do veneno já sai na abertura.
+        const ticks = eventsOfType(opening.events, 'status_damage').filter((event) => event.targetId === 'B3').map((event) => event.amount);
+        let clouds = 0;
+
+        // Vida de sobra, para ele aguentar os três até o veneno acabar.
+        getUnit(result.state, 'A1').stats.maxHp = 10_000;
+        getUnit(result.state, 'A1').hp = 10_000;
+
+        for (let i = 0; result.state.winner === null && result.state.turn <= 5 && i < 40; i++) {
+            const actor = getUnit(result.state, result.state.activeUnitId ?? '');
+
+            result = applyAction(result.state, { unitId: actor.id, skillId: actor.skills[0]?.id ?? '', targetId: actor.team === 'A' ? 'B1' : 'A1' });
+            ticks.push(...eventsOfType(result.events, 'status_damage').filter((event) => event.targetId === 'B3').map((event) => event.amount));
+            clouds += eventsOfType(result.events, 'passive_triggered').filter((event) => event.passiveId === 'guardiao.nuvem-de-esporos').length;
+        }
+
+        // 29, depois 29 x 1,6 e 29 x 2,2 (Toxina Potente). Acabou o veneno, acabou: a nuvem não volta nos turnos seguintes.
+        assert.deepEqual(ticks, [29, 46, 64]);
+        assert.ok(result.state.turn > 5);
+        assert.equal(clouds, 0);
+    });
+
+    it('Guardião: as Raízes causam dano e envenenam por 3 turnos; renovado a cada golpe, o veneno não para de crescer', () => {
         const opening = createBattle({ teamA: [getCharacter('guardiao')], teamB: [getCharacter('cavaleiro')], seed: 1 }).state;
 
-        opening.activeUnitId = 'A1';
-        opening.order = ['A1', 'B1'];
+        assert.equal(opening.activeUnitId, 'A1', 'o Guardião é mais veloz que o Cavaleiro');
+        assert.deepEqual(getCharacter('guardiao').skills.map((skill) => skill.id), ['guardiao.raizes', 'guardiao.seiva']);
 
-        let result = applyAction(opening, { unitId: 'A1', skillId: 'guardiao.esporos-venenosos', targetId: 'B1' });
+        let result = applyAction(opening, { unitId: 'A1', skillId: 'guardiao.raizes', targetId: 'B1' });
+        const poison = eventsOfType(result.events, 'status_applied').find((event) => event.status === 'poison');
         const ticks = eventsOfType(result.events, 'status_damage').map((event) => event.amount);
 
-        for (let i = 0; i < 6; i++) {
+        // ATK 190 x 100 / (100 + 90 de defesa) = 100 de dano, e o veneno de 190 x 0,55 = 105 no lugar do da abertura.
+        assert.equal(eventsOfType(result.events, 'damage')[0]?.amount, 100);
+        assert.deepEqual([poison?.targetId, poison?.turns, poison?.value], ['B1', 3, 105]);
+
+        for (let i = 0; i < 7; i++) {
             const actor = getUnit(result.state, result.state.activeUnitId ?? '');
 
             result = applyAction(result.state, { unitId: actor.id, skillId: actor.skills[0]?.id ?? '', targetId: actor.team === 'A' ? 'B1' : 'A1' });
             ticks.push(...eventsOfType(result.events, 'status_damage').map((event) => event.amount));
         }
 
-        // ATK 190 x 0,55 = 105 (sem os 60% de antes), depois 105 x 1,6 e 105 x 2,2.
-        assert.deepEqual(ticks, [105, 168, 231]);
+        // 105, depois 105 x 1,6, x 2,2 e x 2,8: como o alvo nunca fica sem veneno, a conta não zera.
+        assert.deepEqual(ticks, [105, 168, 231, 294]);
     });
 });
