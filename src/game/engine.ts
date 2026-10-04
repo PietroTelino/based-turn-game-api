@@ -17,6 +17,7 @@ import type {
     BattleState,
     BattleUnit,
     CharacterDefinition,
+    FormDefinition,
     PassiveCondition,
     PassiveDefinition,
     PassiveEffect,
@@ -63,6 +64,9 @@ import type {
  *   5. a unidade age (applyAction);
  *   6. termina a vez: os status dela gastam um turno de duração.
  *
+ * Quem tem a passiva de ação extra e se transforma no passo 5 repete o passo
+ * 5 antes do 6: age de novo, já na forma nova.
+ *
  * Passivas: cada unidade tem as suas (`unit.passives`). Ninguém as usa; o
  * motor as aplica sozinho. A maioria muda os golpes da própria unidade (ver
  * `getHitModifiers`); as de começo de vez agem no passo 4.
@@ -86,6 +90,15 @@ const STAT_MODIFIERS: Partial<Record<StatusKind, { stat: 'atk' | 'def' | 'speed'
     speed_up: { stat: 'speed', sign: 1 },
     speed_down: { stat: 'speed', sign: -1 },
 };
+
+/** Os status que atrapalham quem os carrega. São os que a purificação (efeito 'cleanse') remove. */
+export const NEGATIVE_STATUSES: StatusKind[] = ['stun', 'burn', 'poison', 'bleed', 'heal_down', 'atk_down', 'def_down', 'speed_down'];
+
+/** Os status que causam dano no começo da vez de quem os carrega. */
+export const DAMAGE_STATUSES: StatusKind[] = ['burn', 'poison', 'bleed'];
+
+/** O id da forma original de quem se transforma, em `unit.baseForm`. */
+export const BASE_FORM = 'base';
 
 /** Limite de segurança para o laço de "quem joga a seguir". */
 const MAX_SKIPPED_ACTIVATIONS = 1000;
@@ -122,6 +135,21 @@ export function getStatuses(unit: BattleUnit): StatusEffect[] {
 
 export function hasStatus(unit: BattleUnit, kind: StatusKind): boolean {
     return getStatuses(unit).some((status) => status.kind === kind);
+}
+
+/** Um cadáver: unidade derrotada que ainda pode ser erguida. Uma invocação que cai não deixa cadáver. */
+export function isCorpse(unit: BattleUnit): boolean {
+    return !isAlive(unit) && !unit.summoned;
+}
+
+/**
+ * Por quanto a cura que a unidade recebe é multiplicada: 1 normalmente, menos
+ * com o status heal_down (0.6 de redução = recebe 40% da cura).
+ */
+export function getHealingFactor(unit: BattleUnit): number {
+    const reduction = getStatuses(unit).find((status) => status.kind === 'heal_down')?.value ?? 0;
+
+    return Math.max(0, 1 - reduction);
 }
 
 /** As passivas de uma unidade. Batalhas gravadas antes de elas existirem não têm o campo. */
@@ -237,6 +265,8 @@ function getHitModifiers(attacker: BattleUnit, target?: BattleUnit): HitModifier
             case 'atk_from_def':
             case 'status_power':
             case 'status_growth':
+            case 'extra_action_on_transform':
+            case 'count_corpses':
             case 'turn_start':
                 break;
         }
@@ -357,6 +387,7 @@ export function calculateStatusValue(caster: Stats, effect: StatusSkillEffect): 
     switch (effect.status) {
         case 'burn':
         case 'poison':
+        case 'bleed':
         case 'shield':
             return Math.max(1, Math.round(caster.atk * effect.power));
         case 'stun':
@@ -472,6 +503,18 @@ function buildTeam(team: TeamId, characters: CharacterDefinition[]): BattleUnit[
             statuses: [],
             skills: structuredClone(character.skills),
             passives: structuredClone(character.passives ?? []),
+            ...(character.summons?.length && { summons: structuredClone(character.summons) }),
+            // Quem se transforma leva junto as formas e a original, para voltar.
+            ...(character.forms?.length && {
+                forms: structuredClone(character.forms),
+                baseForm: structuredClone({
+                    id: BASE_FORM,
+                    name: character.name,
+                    stats: character.stats,
+                    skills: character.skills,
+                    passives: character.passives ?? [],
+                }),
+            }),
         };
     });
 }
@@ -513,6 +556,11 @@ export function applyAction(current: BattleState, action: BattleAction): BattleR
 
     const targets = resolveTargets(state, actor, skill, action.targetId);
 
+    // Habilidade sem ninguém para atingir (erguer um cadáver sem cadáver no time) não pode ser usada.
+    if (targets.length === 0) {
+        throw new GameRuleError('INVALID_TARGET', `${skill.name} não tem alvo`);
+    }
+
     // 2. Pagar o custo
     state.energy[actor.team] -= skill.energyCost;
 
@@ -527,6 +575,9 @@ export function applyAction(current: BattleState, action: BattleAction): BattleR
 
     // 3. Aplicar os efeitos, na ordem em que aparecem na habilidade
     const stacksBefore = actor.passiveStacks ?? 0;
+    // A passiva de ação extra é a da forma em que a unidade está ANTES de se transformar.
+    const extraOnTransform = getPassiveEffects(actor).some(({ effect }) => effect.type === 'extra_action_on_transform');
+    const formBefore = actor.form;
 
     for (const effect of skill.effects) {
         const receivers = effect.type === 'status' && effect.to === 'self' ? [actor] : targets;
@@ -537,6 +588,18 @@ export function applyAction(current: BattleState, action: BattleAction): BattleR
     }
 
     announceStacks(actor, stacksBefore, events);
+
+    // Ação extra: quem se transformou agora (e tem a passiva) não encerra a
+    // vez. Passa a valer uma "vez" nova da mesma unidade (o relógio anda, para
+    // a trava contra jogada dupla e para a transformação contar este turno),
+    // sem dano de status nem passiva de começo de vez de novo.
+    if (extraOnTransform && actor.form !== formBefore && isAlive(actor) && findWinner(state) === null) {
+        state.step += 1;
+        events.push({ type: 'extra_action', unitId: actor.id });
+        reorderWaiting(state, events);
+
+        return { state, events };
+    }
 
     // 4. Encerrar a vez de quem jogou
     endActivation(state, actor, events);
@@ -579,10 +642,20 @@ function requiresTarget(skill: SkillDefinition): boolean {
     return skill.target === 'single-enemy' || skill.target === 'single-ally';
 }
 
-/** Todas as unidades que a habilidade PODE atingir (apenas vivas). */
+/**
+ * Todas as unidades que a habilidade PODE atingir (apenas vivas).
+ *
+ * Provocação: se algum inimigo está provocando, as habilidades de alvo único
+ * só podem mirar em quem provoca. Golpes em área continuam pegando todos.
+ */
 function getCandidateTargets(state: BattleState, actor: BattleUnit, skill: SkillDefinition): BattleUnit[] {
     switch (skill.target) {
-        case 'single-enemy':
+        case 'single-enemy': {
+            const enemies = state.units.filter((u) => u.team !== actor.team && isAlive(u));
+            const taunting = enemies.filter((u) => hasStatus(u, 'taunt'));
+
+            return taunting.length > 0 ? taunting : enemies;
+        }
         case 'all-enemies':
             return state.units.filter((u) => u.team !== actor.team && isAlive(u));
         case 'single-ally':
@@ -590,6 +663,9 @@ function getCandidateTargets(state: BattleState, actor: BattleUnit, skill: Skill
             return state.units.filter((u) => u.team === actor.team && isAlive(u));
         case 'self':
             return [actor];
+        // Um cadáver por vez: o primeiro aliado derrotado que ainda não foi erguido.
+        case 'corpse':
+            return state.units.filter((u) => u.team === actor.team && isCorpse(u)).slice(0, 1);
     }
 }
 
@@ -626,6 +702,13 @@ function applyEffect(
     effect: SkillEffect,
     events: BattleEvent[],
 ): void {
+    // Erguer um cadáver é o único efeito que age sobre uma unidade derrotada.
+    if (effect.type === 'summon') {
+        raiseCorpse(state, actor, target, effect.summon, events);
+
+        return;
+    }
+
     // Um alvo pode ter morrido para um efeito anterior da mesma habilidade.
     if (!isAlive(target)) {
         return;
@@ -681,7 +764,7 @@ function applyEffect(
             const drain = (effect.drain ?? 0) + modifiers.lifesteal;
 
             if (drain > 0 && lost > 0) {
-                const healed = Math.min(actor.stats.maxHp - actor.hp, Math.round(lost * drain));
+                const healed = Math.min(actor.stats.maxHp - actor.hp, Math.round(lost * drain * getHealingFactor(actor)));
 
                 if (healed > 0) {
                     actor.hp += healed;
@@ -696,7 +779,7 @@ function applyEffect(
             }
 
             if (!isAlive(target)) {
-                defeat(target, events);
+                defeat(state, target, events);
 
                 return;
             }
@@ -716,7 +799,8 @@ function applyEffect(
 
         case 'heal': {
             const missing = target.stats.maxHp - target.hp;
-            const amount = Math.min(missing, calculateHeal(getEffectiveStats(actor), effect.power));
+            // Com a cura reduzida (heal_down), o alvo recebe só uma parte.
+            const amount = Math.min(missing, Math.round(calculateHeal(getEffectiveStats(actor), effect.power) * getHealingFactor(target)));
 
             target.hp += amount;
             events.push({ type: 'heal', sourceId: actor.id, targetId: target.id, amount, hp: target.hp });
@@ -761,7 +845,133 @@ function applyEffect(
 
             return;
         }
+
+        case 'cleanse': {
+            const removed = target.statuses.filter((status) => NEGATIVE_STATUSES.includes(status.kind)).map((status) => status.kind);
+
+            // Nada a tirar: a purificação passa em branco, sem evento.
+            if (removed.length === 0) {
+                return;
+            }
+
+            target.statuses = target.statuses.filter((status) => !NEGATIVE_STATUSES.includes(status.kind));
+            events.push({ type: 'cleansed', sourceId: actor.id, targetId: target.id, statuses: removed });
+            pushStatusesChanged(target, events);
+
+            return;
+        }
+
+        case 'transform': {
+            setForm(target, effect.form, events);
+
+            // O prazo da forma é um status: a tela mostra quanto falta e, quando
+            // ele acaba (endActivation), a unidade volta à forma original.
+            target.statuses = [
+                ...target.statuses.filter((status) => status.kind !== 'form'),
+                { kind: 'form', turns: effect.turns, value: 0, sourceId: actor.id, appliedOnStep: state.step },
+            ];
+            pushStatusesChanged(target, events);
+
+            return;
+        }
     }
+}
+
+/**
+ * Ergue o cadáver `corpse` como a invocação `summonId` de `actor`. A unidade
+ * derrotada dá lugar a uma unidade nova no mesmo lugar do time (mesmo id),
+ * com a vida cheia e sem nada do que ela era: atributos, habilidades e
+ * passivas são os da invocação.
+ *
+ * A invocação entra na fila de ação do turno em que é erguida: vai para o
+ * meio de quem ainda não agiu, no lugar que a velocidade dela der (com um
+ * sorteio próprio para os empates). Vale mesmo que o aliado derrotado já
+ * tivesse agido neste turno: a invocação é outra unidade.
+ */
+function raiseCorpse(state: BattleState, actor: BattleUnit, corpse: BattleUnit, summonId: string, events: BattleEvent[]): void {
+    const summon = actor.summons?.find((item) => item.id === summonId);
+
+    if (!summon) {
+        throw new Error(`${actor.name} não tem a invocação ${summonId}`);
+    }
+
+    if (!isCorpse(corpse)) {
+        return;
+    }
+
+    const raised: BattleUnit = {
+        id: corpse.id,
+        characterId: summon.id,
+        name: summon.name,
+        team: corpse.team,
+        stats: structuredClone(summon.stats),
+        hp: summon.stats.maxHp,
+        statuses: [],
+        skills: structuredClone(summon.skills),
+        passives: structuredClone(summon.passives),
+        summoned: true,
+    };
+
+    state.units = state.units.map((unit) => (unit.id === corpse.id ? raised : unit));
+    events.push({ type: 'summoned', sourceId: actor.id, unitId: raised.id, unit: structuredClone(raised) });
+
+    // Sai de onde o cadáver estava na fila (se estava) e entra entre os que
+    // ainda vão agir; reorderWaiting põe no lugar certo pela velocidade.
+    const before = state.order;
+
+    state.order = [...before.filter((unitId) => unitId !== raised.id), raised.id];
+    state.draws[raised.id] = roll(state);
+    reorderWaiting(state, []);
+    events.push({ type: 'order_changed', order: [...state.order] });
+
+    syncCorpseCounts(state, raised.team, events);
+}
+
+/**
+ * Atualiza a conta de cadáveres de quem tem a passiva count_corpses no time
+ * (o número fica em `passiveStacks`) e avisa a tela quando ele muda.
+ */
+function syncCorpseCounts(state: BattleState, team: TeamId, events: BattleEvent[]): void {
+    const corpses = state.units.filter((unit) => unit.team === team && isCorpse(unit)).length;
+
+    for (const unit of state.units) {
+        if (unit.team !== team || !isAlive(unit)) continue;
+
+        for (const { passive, effect } of getPassiveEffects(unit)) {
+            if (effect.type === 'count_corpses' && (unit.passiveStacks ?? 0) !== corpses) {
+                unit.passiveStacks = corpses;
+                events.push({ type: 'passive_triggered', unitId: unit.id, passiveId: passive.id, targetIds: [], stacks: corpses });
+            }
+        }
+    }
+}
+
+/**
+ * Põe a unidade numa forma (`null` = de volta à original): atributos,
+ * habilidades e passivas passam a ser os da forma. A vida mantém a proporção
+ * que tinha (metade da vida de humano vira metade da vida de urso).
+ */
+function setForm(unit: BattleUnit, formId: string | null, events: BattleEvent[]): void {
+    const form: FormDefinition | undefined = formId === null ? unit.baseForm : unit.forms?.find((item) => item.id === formId);
+
+    if (!form) {
+        throw new Error(`${unit.name} não tem a forma ${formId ?? BASE_FORM}`);
+    }
+
+    const ratio = unit.hp / unit.stats.maxHp;
+
+    unit.stats = structuredClone(form.stats);
+    unit.skills = structuredClone(form.skills);
+    unit.passives = structuredClone(form.passives);
+    unit.hp = Math.max(1, Math.round(ratio * unit.stats.maxHp));
+
+    if (formId === null) {
+        delete unit.form;
+    } else {
+        unit.form = formId;
+    }
+
+    events.push({ type: 'transformed', unitId: unit.id, form: formId, hp: unit.hp });
 }
 
 /** Avisa que a passiva agiu. Uma passiva de golpe avisa uma vez por ação, mesmo acertando vários alvos. */
@@ -887,7 +1097,7 @@ function applyTurnStartPassives(state: BattleState, unit: BattleUnit, events: Ba
         const boost = 1 + (getStatuses(unit).find((status) => status.kind === 'passive_up')?.value ?? 0);
 
         for (const item of effect.effects) {
-            const boosted = item.type === 'status' ? item : { ...item, power: item.power * boost };
+            const boosted = item.type === 'damage' || item.type === 'heal' ? { ...item, power: item.power * boost } : item;
 
             for (const target of item.type === 'status' && item.to === 'self' ? [unit] : targets) {
                 applyEffect(state, unit, target, boosted, events);
@@ -919,7 +1129,7 @@ function pushStatusesChanged(unit: BattleUnit, events: BattleEvent[]): void {
     events.push({ type: 'statuses_changed', unitId: unit.id, statuses: structuredClone(unit.statuses) });
 }
 
-function defeat(unit: BattleUnit, events: BattleEvent[]): void {
+function defeat(state: BattleState, unit: BattleUnit, events: BattleEvent[]): void {
     events.push({ type: 'unit_defeated', unitId: unit.id });
 
     // Quem caiu não carrega mais nenhum status.
@@ -927,6 +1137,9 @@ function defeat(unit: BattleUnit, events: BattleEvent[]): void {
         unit.statuses = [];
         pushStatusesChanged(unit, events);
     }
+
+    // Mais um cadáver para quem os conta no time (se quem caiu deixa um).
+    syncCorpseCounts(state, unit.team, events);
 }
 
 /** Sorteia um número de 0 a 1 usando o gerador guardado no estado (e avança esse gerador). */
@@ -1057,7 +1270,7 @@ function activateNext(state: BattleState, events: BattleEvent[]): void {
 
         events.push({ type: 'unit_activated', unitId: unit.id, team: unit.team });
 
-        applyDamageOverTime(unit, events);
+        applyDamageOverTime(state, unit, events);
 
         if (!isAlive(unit)) {
             const winner = findWinner(state);
@@ -1097,15 +1310,15 @@ function activateNext(state: BattleState, events: BattleEvent[]): void {
 }
 
 /**
- * Queimadura e veneno: dano direto na vida, sem passar por defesa nem escudo.
+ * Queimadura, veneno e sangramento: dano direto na vida, sem passar por defesa nem escudo.
  * Um status que cresce conta mais uma vez depois de causar dano, e a tela é
  * avisada para mostrar quanto ele vai causar na próxima.
  */
-function applyDamageOverTime(unit: BattleUnit, events: BattleEvent[]): void {
+function applyDamageOverTime(state: BattleState, unit: BattleUnit, events: BattleEvent[]): void {
     let grew = false;
 
     for (const status of getStatuses(unit)) {
-        if (status.kind !== 'burn' && status.kind !== 'poison') {
+        if (!DAMAGE_STATUSES.includes(status.kind)) {
             continue;
         }
 
@@ -1115,7 +1328,7 @@ function applyDamageOverTime(unit: BattleUnit, events: BattleEvent[]): void {
         events.push({ type: 'status_damage', targetId: unit.id, status: status.kind, amount, hp: unit.hp });
 
         if (!isAlive(unit)) {
-            defeat(unit, events);
+            defeat(state, unit, events);
             return;
         }
 
@@ -1143,6 +1356,7 @@ function endActivation(state: BattleState, unit: BattleUnit, events: BattleEvent
 
     const remaining: StatusEffect[] = [];
     let changed = false;
+    let formEnded = false;
 
     for (const status of unit.statuses) {
         if (status.appliedOnStep === state.step) {
@@ -1156,12 +1370,18 @@ function endActivation(state: BattleState, unit: BattleUnit, events: BattleEvent
             remaining.push({ ...status, turns: status.turns - 1 });
         } else {
             events.push({ type: 'status_expired', unitId: unit.id, status: status.kind });
+            formEnded ||= status.kind === 'form';
         }
     }
 
     if (changed) {
         unit.statuses = remaining;
         pushStatusesChanged(unit, events);
+    }
+
+    // O prazo da transformação acabou: a unidade volta à forma original.
+    if (formEnded && unit.form !== undefined) {
+        setForm(unit, null, events);
     }
 }
 

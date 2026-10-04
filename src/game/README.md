@@ -72,10 +72,20 @@ Uma habilidade aplica um status com um efeito do tipo `status`:
 | Status | O que faz | `power` |
 | --- | --- | --- |
 | `stun` | A unidade perde a vez. | não usa (0) |
-| `burn`, `poison` | Dano quando chega a vez da unidade. Ignora defesa e escudo. Se quem aplicou tem a passiva `status_growth`, o dano cresce a cada turno (veja "Passivas"). | dano = ATK de quem aplicou x power |
+| `burn`, `poison`, `bleed` | Dano quando chega a vez da unidade (queimadura, veneno e sangramento são status separados: podem estar no mesmo alvo). Ignora defesa e escudo. Se quem aplicou tem a passiva `status_growth`, o dano cresce a cada turno (veja "Passivas"). | dano = ATK de quem aplicou x power |
 | `shield` | Absorve dano antes da vida. Some quando zera ou quando a duração acaba. | pontos = ATK de quem aplicou x power |
 | `atk_up`, `atk_down`, `def_up`, `def_down`, `speed_up`, `speed_down` | Aumenta ou reduz o atributo. Bônus e penalidades somam; o atributo nunca cai abaixo de 20%. | fração do atributo (0.3 = 30%) |
-| `passive_up` | A passiva de começo de vez de quem o carrega cura e causa dano mais forte. É o que a Bênção dá ao Clérigo: a Aura Restauradora cura 80% a mais nas duas vezes seguintes. | fração a mais (0.8 = 80%) |
+| `taunt` | Provocação: enquanto a unidade o carrega, as habilidades de alvo único dos inimigos só podem mirar nela (ou em outra que também provoque). Golpes em área e passivas que escolhem o alvo sozinhas não mudam. Acaba se ela for derrotada. É o Brado de Guerra do Cavaleiro (`to: 'self'`). | não usa (0) |
+| `heal_down` | A unidade recebe menos cura, de qualquer origem: habilidade, passiva ou roubo de vida (`getHealingFactor`). É a maldição do Necromante. | fração a menos (0.6 = recebe 40% da cura) |
+| `form` | A unidade está transformada (veja "Formas"). Quando acaba, ela volta à forma original. Não é aplicado como os outros: quem o cria é o efeito `transform`. | não usa (0) |
+| `passive_up` | A passiva de começo de vez de quem o carrega cura e causa dano mais forte. É o que a Bênção dá ao Sacerdote: a Aura Restauradora cura 80% a mais nas duas vezes seguintes. | fração a mais (0.8 = 80%) |
+
+Purificação: o efeito `{ type: 'cleanse' }` tira do alvo todos os status
+negativos (`NEGATIVE_STATUSES`: atordoamento, queimadura, veneno e as
+penalidades de atributo) e deixa bônus e escudo. Um aliado atordoado que é
+purificado antes da própria vez não a perde, e um veneno que crescia recomeça
+do normal se for aplicado de novo. Está no Toque Curativo do Sacerdote e no
+Abraço da Floresta da Dríade, antes da cura.
 
 Regras de duração:
 
@@ -88,7 +98,7 @@ Regras de duração:
 
 O ciclo de uma vez fica assim: queimadura e veneno causam dano, a unidade atordoada perde a vez, a passiva de começo de vez age, a unidade age, os status dela gastam um turno.
 
-Para a tela, o motor emite `turn_started` (turno novo, com a ordem, a energia e quanto a fúria vale), `order_changed` (a ordem mudou no meio do turno), `unit_activated` (chegou a vez de alguém), `status_applied`, `status_damage`, `status_expired` e `unit_skipped` (para animar) e `statuses_changed`, que traz a lista completa de status da unidade depois de qualquer mudança. A tela só copia essa lista.
+Para a tela, o motor emite `turn_started` (turno novo, com a ordem, a energia e quanto a fúria vale), `order_changed` (a ordem mudou no meio do turno), `unit_activated` (chegou a vez de alguém), `status_applied`, `status_damage`, `status_expired`, `cleansed` (uma purificação tirou status de alguém) e `unit_skipped` (para animar) e `statuses_changed`, que traz a lista completa de status da unidade depois de qualquer mudança. A tela só copia essa lista.
 
 ## Passivas
 
@@ -98,18 +108,20 @@ mostrada na carta e no painel da batalha. O campo `effect` diz o que ela faz:
 
 | `effect.type` | O que faz | Quem usa |
 | --- | --- | --- |
-| `damage_bonus` | Os golpes causam mais dano (`amount`: 0.3 = +30%). Com `when`, só contra o alvo que está na condição. | Piromante, Criomante, Banshee, Arqueiro |
+| `damage_bonus` | Os golpes causam mais dano (`amount`: 0.3 = +30%). Com `when`, só contra o alvo que está na condição. | Piromante, Criomante, Banshee, Arqueiro, Guerreiro Esqueleto |
 | `crit_chance_bonus` | Soma à chance de crítico. Também aceita `when`. | Ladino |
 | `ignore_defense` | Os golpes ignoram uma fração da defesa do alvo. | Espadachim |
 | `atk_from_def` | Os golpes somam ao ataque uma fração da defesa de quem bate. Cura e status não mudam. | Cavaleiro |
-| `lifesteal` | Todo golpe devolve como vida uma fração do dano que o alvo perdeu. Soma com o `drain` da habilidade. | ninguém, por enquanto |
+| `lifesteal` | Todo golpe devolve como vida uma fração do dano que o alvo perdeu. Soma com o `drain` da habilidade. | Druida (urso) |
 | `damage_per_drain` | Passiva que acumula cargas: cada vez que a unidade recupera vida com roubo de vida, ganha uma carga, e cada carga soma `amount` ao dano dos golpes dela até o fim da batalha (0.05 = +5%). Cura que não aconteceu (vida cheia) não conta. `max` limita as cargas. Elas ficam em `unit.passiveStacks`. | Vampiro |
 | `damage_per_missing_hp` | Quanto mais ferida a unidade, mais forte ela bate: para cada 1% da vida máxima perdida, `amount`% a mais de dano (amount 1 = 1% por 1%). Conta pontos inteiros de porcentagem e acompanha a vida: com cura, o bônus cai. | Bárbaro |
 | `energy_on_crit` | Um acerto crítico devolve energia ao time, até o máximo de 10 (pode passar da energia do turno). | Bárbaro |
-| `status_on_hit` | Todo golpe da unidade também aplica um status no alvo (`status`, `turns`, `power`, `chance`, como no efeito de uma habilidade). É aplicado depois do dano, então não vale para o próprio golpe; se o alvo já tem o mesmo status mais forte, fica o mais forte. | Arqueiro |
+| `status_on_hit` | Todo golpe da unidade também aplica um status no alvo (`status`, `turns`, `power`, `chance`, como no efeito de uma habilidade). É aplicado depois do dano, então não vale para o próprio golpe; se o alvo já tem o mesmo status mais forte, fica o mais forte. | Arqueiro, Druida (lobo) |
 | `status_power` | Os status dos tipos listados que a unidade aplica valem mais (`amount`: 0.6 = +60%). | ninguém, por enquanto |
 | `status_growth` | O dano por turno dos status listados que a unidade aplica cresce com o tempo: o primeiro dano é o normal e cada turno seguinte soma `amount` do valor original (0.6: 100%, 160%, 220%...). O status guarda `growth` e `ticks` (quantas vezes já causou dano); o dano de agora é `getStatusTickDamage`. Renovar o status antes de ele acabar mantém a conta, mesmo que quem renove seja um aliado sem a passiva; se ele acabar, o próximo recomeça do normal. Depois de cada dano o motor emite `statuses_changed`. | Guardião |
-| `turn_start` | Age sozinha no começo da vez da unidade, se ela não estiver atordoada: aplica `effects` em `target`, como uma habilidade sem custo. `all-allies` (se só cura, pula quem está com a vida cheia) ou `fastest-enemy`. | Clérigo, Dríade |
+| `extra_action_on_transform` | Quando a unidade se transforma, a vez não acaba: ela age de novo, já na forma nova. | Druida |
+| `count_corpses` | Conta os cadáveres do time: aliados derrotados que ainda não foram erguidos. O número fica em `unit.passiveStacks` e o motor avisa quando ele muda (`passive_triggered` com `stacks`). É só a conta: quem usa os cadáveres é o efeito `summon`. | Necromante |
+| `turn_start` | Age sozinha no começo da vez da unidade, se ela não estiver atordoada: aplica `effects` em `target`, como uma habilidade sem custo. `all-allies` (se só cura, pula quem está com a vida cheia) ou `fastest-enemy`. | Sacerdote, Dríade |
 
 Uma passiva pode fazer mais de uma coisa: o efeito principal fica em `effect`
 e os outros em `also` (a do Arqueiro soma dano com condição e redução de
@@ -119,7 +131,7 @@ Condições (`when`), sempre sobre o alvo do golpe: `target_has_status` (tem
 pelo menos um dos status), `target_hp_below` e `target_hp_above` (fração da
 vida máxima).
 
-As passivas do Clérigo e da Dríade eram habilidades ativas de 3 de energia
+As passivas do Sacerdote e da Dríade eram habilidades ativas de 3 de energia
 (Luz Restauradora e Raízes Enredantes). Viraram versões que acontecem a
 cada vez, sem custo.
 
@@ -138,6 +150,67 @@ sem passiva para ninguém.
 Para criar um tipo novo de passiva: acrescente-o em `PassiveEffect`
 (`types.ts`), trate-o em `getHitModifiers` (ou no ponto do motor em que ele
 age) e escreva um teste em `tests/passives.test.ts`.
+
+## Formas
+
+Um personagem pode ter `forms` em `data/characters.ts`: outras formas em que
+ele se transforma no meio da batalha. Cada forma tem os próprios atributos,
+habilidades e passivas (`FormDefinition`), e segue as regras de um
+personagem: a primeira habilidade é o ataque básico, no máximo três ativas.
+Hoje só o Druida tem: começa humano e vira **urso** (tanque: mais vida e
+defesa, provoca, rouba vida) ou **lobo** (dano: veloz, crítico alto, todo
+golpe causa sangramento).
+
+- Quem transforma é o efeito `{ type: 'transform', form: 'urso', turns: 3 }`
+  de uma habilidade. A unidade troca `stats`, `skills` e `passives` pelos da
+  forma e ganha o status `form` com a duração. A vida mantém a proporção
+  (metade da vida de humano vira metade da vida de urso). Os outros status e
+  a energia do time não mudam.
+- Quando o status `form` acaba (no fim de uma vez da unidade, como qualquer
+  status), ela volta à forma original, de novo com a vida em proporção.
+- A unidade leva na batalha `forms` (cópia de todas as formas) e `baseForm`
+  (a original, com id `base`), para o estado continuar autossuficiente.
+  `unit.form` é o id da forma atual; ausente = original.
+- Ação extra: com a passiva `extra_action_on_transform`, a transformação não
+  gasta a vez. `applyAction` devolve o estado com a mesma unidade na vez,
+  `state.step` anda um (é outra "vez" no relógio, o que mantém a trava contra
+  jogada dupla e faz a vez da transformação contar como o primeiro turno da
+  forma), e não há novo dano de status nem passiva de começo de vez. "3
+  turnos" de forma são três vezes agindo nela: a da transformação e mais duas.
+- Uma habilidade de transformação precisa ter custo (há um teste): sem custo,
+  a ação extra viraria ações sem fim.
+- Para a tela: `transformed` (`form` é o id da forma nova, ou null na volta à
+  original; `hp` é a vida depois da troca) e `extra_action`.
+- A IA transforma quem pode: na forma com mais vida se a unidade está com
+  menos da metade da vida, na de mais ataque se está bem.
+
+## Invocações
+
+Um personagem pode ter `summons`: unidades que ele põe em campo no meio da
+batalha. Hoje só o Necromante tem, com o **Guerreiro Esqueleto**.
+
+- A invocação tem o mesmo formato de uma forma (`FormDefinition`: id, nome,
+  atributos, habilidades, passivas), mas é uma unidade própria: o id dela vira
+  o `characterId` da unidade (é o que a tela usa para achar a ilustração) e
+  as habilidades são `<invocação>.<habilidade>`. Ela não entra em
+  `CHARACTERS`, então não pode ser escolhida para um time.
+- Quem invoca é o efeito `{ type: 'summon', summon: 'esqueleto' }`, numa
+  habilidade de alvo `corpse`: o cadáver de um aliado, isto é, uma unidade
+  derrotada do próprio time que ainda não foi erguida (`isCorpse`). O motor
+  escolhe o primeiro cadáver do time; sem cadáver, a habilidade aparece como
+  não utilizável e `applyAction` recusa com `INVALID_TARGET`.
+- A unidade derrotada dá lugar à invocação **no mesmo lugar do time** (mesmo
+  id, `A3` continua `A3`), com vida cheia e sem nada do que era. O time nunca
+  passa do tamanho com que começou.
+- A invocação entra na fila de ação do turno em que é erguida, entre quem
+  ainda não agiu, no lugar que a velocidade dela der (`order_changed`). Vale
+  mesmo que o aliado derrotado já tivesse agido neste turno.
+- Ela é marcada com `summoned: true` e, quando cai, não deixa cadáver: cada
+  aliado pode ser erguido uma vez.
+- Enquanto houver uma invocação de pé, o time não perdeu.
+- Para a tela: `summoned` traz a unidade nova inteira (`unit`), para trocar
+  pela antiga.
+- A IA ergue sempre que há cadáver e energia.
 
 ## Elemento das habilidades
 
@@ -176,4 +249,6 @@ menos uma passiva, e a descrição dela tem que dizer os mesmos números do
 `npm run battle:balance` para ver se ele ficou forte ou fraco demais.
 
 A arte fica no front, em `src/assets/characters/`, com o `id` do personagem
-no nome do arquivo.
+no nome do arquivo. Quem tem formas tem também a arte de cada uma, em
+`<id>-<forma>.webp` e `<id>-<forma>-face.webp`. Uma invocação usa o id dela:
+`esqueleto.webp` e `esqueleto-face.webp`.

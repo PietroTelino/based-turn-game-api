@@ -4,42 +4,74 @@ import { chooseAction, chooseTrainingAction } from '../ai';
 import { CHARACTERS, getCharacter } from '../data/characters';
 import { applyAction, createBattle, getUnit } from '../engine';
 
+/**
+ * Cada conjunto de habilidades e passivas do catálogo: o de cada personagem,
+ * o de cada forma de quem se transforma e o de cada invocação. As regras
+ * valem para todos.
+ */
+const KITS = CHARACTERS.flatMap((character) => [
+    { owner: character.id, label: character.id, skills: character.skills, passives: character.passives },
+    ...(character.forms ?? []).map((form) => ({ owner: character.id, label: `${character.id} (${form.id})`, skills: form.skills, passives: form.passives })),
+    // Uma invocação é uma unidade própria: os ids das habilidades dela levam o id dela.
+    ...(character.summons ?? []).map((summon) => ({ owner: summon.id, label: `${character.id} > ${summon.id}`, skills: summon.skills, passives: summon.passives })),
+]);
+
 describe('catálogo de personagens', () => {
     it('ids de personagens e de habilidades são únicos', () => {
         const characterIds = CHARACTERS.map((c) => c.id);
-        const skillIds = CHARACTERS.flatMap((c) => c.skills.map((s) => s.id));
+        const skillIds = KITS.flatMap((kit) => kit.skills.map((s) => s.id));
 
         assert.equal(new Set(characterIds).size, characterIds.length);
         assert.equal(new Set(skillIds).size, skillIds.length);
     });
 
-    it('todo personagem começa com um ataque básico: custo 0 e alvo inimigo', () => {
-        for (const character of CHARACTERS) {
-            const [basic] = character.skills;
+    it('todo personagem (e toda forma) começa com um ataque básico: custo 0 e alvo inimigo', () => {
+        for (const kit of KITS) {
+            const [basic] = kit.skills;
 
-            assert.equal(basic?.energyCost, 0, character.id);
-            assert.equal(basic?.target, 'single-enemy', character.id);
+            assert.equal(basic?.energyCost, 0, kit.label);
+            assert.equal(basic?.target, 'single-enemy', kit.label);
         }
     });
 
-    it('todo personagem tem pelo menos uma passiva, com id próprio, nome e descrição', () => {
-        const passiveIds = CHARACTERS.flatMap((c) => c.passives.map((p) => p.id));
-        const skillIds = CHARACTERS.flatMap((c) => c.skills.map((s) => s.id));
+    it('todo personagem (e toda forma) tem pelo menos uma passiva, com id próprio, nome e descrição', () => {
+        const passiveIds = KITS.flatMap((kit) => kit.passives.map((p) => p.id));
+        const skillIds = KITS.flatMap((kit) => kit.skills.map((s) => s.id));
 
         assert.equal(new Set([...passiveIds, ...skillIds]).size, passiveIds.length + skillIds.length);
 
-        for (const character of CHARACTERS) {
-            assert.ok(character.passives.length >= 1, character.id);
+        for (const kit of KITS) {
+            assert.ok(kit.passives.length >= 1, kit.label);
 
-            for (const passive of character.passives) {
-                assert.ok(passive.id.startsWith(`${character.id}.`), passive.id);
-                assert.ok(passive.name && passive.description && passive.element, passive.id);
+            for (const item of [...kit.skills, ...kit.passives]) {
+                assert.ok(item.id.startsWith(`${kit.owner}.`), item.id);
+                assert.ok(item.name && item.description && item.element, item.id);
+            }
+        }
+    });
+
+    it('as formas têm id único no personagem, e toda transformação aponta para uma forma que existe', () => {
+        for (const character of CHARACTERS) {
+            const formIds = (character.forms ?? []).map((form) => form.id);
+
+            assert.equal(new Set(formIds).size, formIds.length, character.id);
+
+            const kits = [character, ...(character.forms ?? [])];
+
+            for (const skill of kits.flatMap((kit) => kit.skills)) {
+                for (const effect of skill.effects) {
+                    if (effect.type !== 'transform') continue;
+
+                    assert.ok(formIds.includes(effect.form), `${skill.id}: forma ${effect.form}`);
+                    assert.ok(skill.energyCost > 0, `${skill.id}: transformação sem custo daria ações extras sem fim`);
+                    assert.ok(skill.description.includes(`${effect.turns} turno`), `${skill.id}: a descrição deveria dizer a duração`);
+                }
             }
         }
     });
 
     it('a descrição de um golpe de execução diz quanto ele cresce com a vida que o alvo perdeu', () => {
-        const executes = CHARACTERS.flatMap((c) => c.skills).filter((skill) => skill.effects.some((effect) => effect.type === 'damage' && effect.perTargetMissingHp));
+        const executes = KITS.flatMap((kit) => kit.skills).filter((skill) => skill.effects.some((effect) => effect.type === 'damage' && effect.perTargetMissingHp));
 
         assert.deepEqual(executes.map((skill) => skill.id), ['ladino.golpe-fatal']);
 
@@ -56,7 +88,7 @@ describe('catálogo de personagens', () => {
         const percent = (fraction: number) => `${Math.round(fraction * 100)}%`;
 
         // Uma passiva pode ter mais de um efeito (`also`): a descrição precisa dizer os números de todos.
-        const entries = CHARACTERS.flatMap((c) => c.passives).flatMap((passive) =>
+        const entries = KITS.flatMap((kit) => kit.passives).flatMap((passive) =>
             [passive.effect, ...(passive.also ?? [])].map((effect) => ({ id: passive.id, description: passive.description, effect })),
         );
 
@@ -64,7 +96,9 @@ describe('catálogo de personagens', () => {
             // Os números que precisam aparecer no texto, conforme o tipo do efeito.
             const numbers: string[] = [];
 
-            if (effect.type === 'energy_on_crit') {
+            if (effect.type === 'extra_action_on_transform' || effect.type === 'count_corpses') {
+                // Sem número: a passiva só diz o que acontece (age de novo, conta os cadáveres).
+            } else if (effect.type === 'energy_on_crit') {
                 numbers.push(`${effect.amount} de energia`);
             } else if (effect.type === 'damage_per_missing_hp') {
                 // "Para cada 1% de vida perdida, N% a mais."
@@ -73,6 +107,8 @@ describe('catálogo de personagens', () => {
                 numbers.push(percent(effect.power), `${effect.turns} turno`);
             } else if (effect.type === 'turn_start') {
                 for (const item of effect.effects) {
+                    if (item.type === 'cleanse' || item.type === 'transform' || item.type === 'summon') continue;
+
                     numbers.push(percent(item.power));
                     if (item.type === 'status') numbers.push(`${item.turns} turno`);
                 }
@@ -94,14 +130,47 @@ describe('catálogo de personagens', () => {
         }
     });
 
-    it('ninguém tem mais de três habilidades ativas: a quarta virou passiva', () => {
+    it('as invocações têm id que não é de personagem, e só cadáver é alvo de invocação', () => {
+        const characterIds = CHARACTERS.map((c) => c.id);
+
         for (const character of CHARACTERS) {
-            assert.ok(character.skills.length <= 3, character.id);
+            const summonIds = (character.summons ?? []).map((summon) => summon.id);
+
+            for (const id of summonIds) {
+                assert.ok(!characterIds.includes(id), `${id}: uma invocação não pode ser escolhida para o time`);
+            }
+
+            for (const skill of character.skills) {
+                const summon = skill.effects.find((effect) => effect.type === 'summon');
+
+                assert.equal(skill.target === 'corpse', summon !== undefined, skill.id);
+
+                if (summon?.type === 'summon') {
+                    assert.ok(summonIds.includes(summon.summon), `${skill.id}: invocação ${summon.summon}`);
+                }
+            }
+        }
+    });
+
+    it('a descrição de quem reduz a cura diz quanto e por quanto tempo', () => {
+        for (const skill of KITS.flatMap((kit) => kit.skills)) {
+            for (const effect of skill.effects) {
+                if (effect.type !== 'status' || effect.status !== 'heal_down') continue;
+
+                assert.ok(skill.description.includes(`${Math.round(effect.power * 100)}%`), skill.id);
+                assert.ok(skill.description.includes(`${effect.turns} turno`), skill.id);
+            }
+        }
+    });
+
+    it('ninguém tem mais de três habilidades ativas: a quarta virou passiva', () => {
+        for (const kit of KITS) {
+            assert.ok(kit.skills.length <= 3, kit.label);
         }
     });
 
     it('toda habilidade tem elemento, e só golpe em inimigos é à distância', () => {
-        for (const skill of CHARACTERS.flatMap((c) => c.skills)) {
+        for (const skill of KITS.flatMap((kit) => kit.skills)) {
             assert.ok(skill.element, skill.id);
 
             if (skill.ranged) {
@@ -114,7 +183,7 @@ describe('catálogo de personagens', () => {
 describe('IA', () => {
     it('cura o aliado ferido quando tem energia', () => {
         const { state } = createBattle({
-            teamA: [getCharacter('clerigo'), getCharacter('cavaleiro')],
+            teamA: [getCharacter('sacerdote'), getCharacter('cavaleiro')],
             teamB: [getCharacter('cavaleiro')],
             seed: 1,
         });
@@ -122,7 +191,7 @@ describe('IA', () => {
         assert.equal(state.activeUnitId, 'A1');
         getUnit(state, 'A2').hp = 100;
 
-        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'clerigo.toque-curativo', targetId: 'A2' });
+        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'sacerdote.toque-curativo', targetId: 'A2' });
     });
 
     it('prefere a cura em área quando vários aliados estão feridos', () => {
@@ -142,15 +211,15 @@ describe('IA', () => {
 
     it('usa suporte em quem ainda não tem o efeito e não repete à toa', () => {
         const { state } = createBattle({
-            teamA: [getCharacter('clerigo'), getCharacter('cavaleiro')],
+            teamA: [getCharacter('sacerdote'), getCharacter('cavaleiro')],
             teamB: [getCharacter('cavaleiro')],
             seed: 1,
         });
 
         assert.equal(state.activeUnitId, 'A1');
-        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'clerigo.bencao' });
+        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'sacerdote.bencao' });
 
-        // O time como fica depois da Bênção: todos com os bônus, e o Clérigo com a passiva fortalecida.
+        // O time como fica depois da Bênção: todos com os bônus, e o Sacerdote com a passiva fortalecida.
         for (const unit of state.units.filter((u) => u.team === 'A')) {
             unit.statuses = [
                 { kind: 'speed_up', turns: 2, value: 0.3, sourceId: 'A1', appliedOnStep: 0 },
@@ -160,7 +229,46 @@ describe('IA', () => {
 
         getUnit(state, 'A1').statuses.push({ kind: 'passive_up', turns: 2, value: 0.8, sourceId: 'A1', appliedOnStep: 0 });
 
-        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'clerigo.raio-de-luz', targetId: 'B1' });
+        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'sacerdote.raio-de-luz', targetId: 'B1' });
+    });
+
+    it('purifica o aliado atordoado ou com dano pesado por turno, e não gasta com efeito fraco', () => {
+        const { state } = createBattle({
+            teamA: [getCharacter('sacerdote'), getCharacter('cavaleiro'), getCharacter('barbaro')],
+            teamB: [getCharacter('cavaleiro')],
+            seed: 1,
+        });
+
+        state.activeUnitId = 'A1';
+
+        // Queimadura de 62 no Cavaleiro (1300 de vida): menos de 10% por turno, não compensa.
+        getUnit(state, 'A2').statuses = [{ kind: 'burn', turns: 2, value: 62, sourceId: 'B1', appliedOnStep: 0 }];
+        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'sacerdote.bencao' });
+
+        // Veneno de 105 no Bárbaro (650 de vida): compensa.
+        getUnit(state, 'A3').statuses = [{ kind: 'poison', turns: 3, value: 105, sourceId: 'B1', appliedOnStep: 0 }];
+        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'sacerdote.toque-curativo', targetId: 'A3' });
+
+        // Atordoamento vale mais que tudo: devolve a vez do aliado.
+        getUnit(state, 'A2').statuses = [{ kind: 'stun', turns: 1, value: 0, sourceId: 'B1', appliedOnStep: 0 }];
+        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'sacerdote.toque-curativo', targetId: 'A2' });
+
+        // Aliado com menos da metade da vida vem antes: a cura vai para ele.
+        getUnit(state, 'A3').hp = 100;
+        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'sacerdote.toque-curativo', targetId: 'A3' });
+    });
+
+    it('com um inimigo provocando, os golpes de alvo único vão nele, mesmo havendo outro com menos vida', () => {
+        const { state } = createBattle({
+            teamA: [getCharacter('barbaro')],
+            teamB: [getCharacter('cavaleiro'), getCharacter('sacerdote')],
+            seed: 1,
+        });
+
+        assert.equal(state.activeUnitId, 'A1');
+        getUnit(state, 'B1').statuses = [{ kind: 'taunt', turns: 2, value: 0, sourceId: 'B1', appliedOnStep: 0 }];
+
+        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'barbaro.golpe-trovejante', targetId: 'B1' });
     });
 
     it('dá o escudo ao aliado mais ferido que ainda não tem um', () => {
@@ -183,7 +291,7 @@ describe('IA', () => {
     it('sem ninguém ferido, ataca o inimigo com menos vida', () => {
         const { state } = createBattle({
             teamA: [getCharacter('barbaro')],
-            teamB: [getCharacter('cavaleiro'), getCharacter('clerigo')],
+            teamB: [getCharacter('cavaleiro'), getCharacter('sacerdote')],
             seed: 1,
         });
 
@@ -194,7 +302,7 @@ describe('IA', () => {
 
     it('de treino: mira em quem tem mais vida e só usa uma habilidade com custo por turno', () => {
         let { state } = createBattle({
-            teamA: [getCharacter('cavaleiro'), getCharacter('clerigo')],
+            teamA: [getCharacter('cavaleiro'), getCharacter('sacerdote')],
             teamB: [getCharacter('barbaro'), getCharacter('piromante')],
             seed: 1,
         });
@@ -205,7 +313,7 @@ describe('IA', () => {
 
         const first = chooseTrainingAction(state);
 
-        // A IA normal bateria no Cavaleiro ferido; a de treino vai no Clérigo, que está inteiro.
+        // A IA normal bateria no Cavaleiro ferido; a de treino vai no Sacerdote, que está inteiro.
         assert.equal(chooseAction(state).targetId, 'A1');
         assert.equal(first.targetId, 'A2');
         assert.equal(first.skillId, 'barbaro.golpe-trovejante');
@@ -224,7 +332,7 @@ describe('IA', () => {
 
     it('de treino: perde para um jogador que só usa o ataque básico', () => {
         // É a batalha do tutorial (os times ficam em src/battle/tutorial.ts, no app).
-        const player = ['cavaleiro', 'barbaro', 'piromante', 'arqueiro', 'clerigo'].map(getCharacter);
+        const player = ['cavaleiro', 'barbaro', 'piromante', 'arqueiro', 'sacerdote'].map(getCharacter);
         const enemy = ['guardiao', 'vampiro', 'espadachim', 'criomante', 'driade'].map(getCharacter);
 
         for (const seed of [1, 2, 3, 4, 5]) {

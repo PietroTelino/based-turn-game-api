@@ -26,6 +26,10 @@ const STATUS_NAMES: Record<StatusKind, string> = {
     speed_up: 'velocidade aumentada',
     speed_down: 'velocidade reduzida',
     passive_up: 'passiva fortalecida',
+    taunt: 'provocação',
+    bleed: 'sangramento',
+    heal_down: 'cura reduzida',
+    form: 'transformação',
 };
 
 function describe(state: BattleState, event: BattleEvent): string | null {
@@ -71,6 +75,21 @@ function describe(state: BattleState, event: BattleEvent): string | null {
         case 'unit_skipped':
             return `  ${label(event.unitId)} está atordoado e perde a vez`;
 
+        case 'transformed': {
+            const unit = getUnit(state, event.unitId);
+            const form = event.form === null ? 'forma original' : (unit.forms?.find((item) => item.id === event.form)?.name ?? event.form);
+            return `    ${label(event.unitId)} agora é ${form} [${event.hp}/${unit.stats.maxHp}]`;
+        }
+
+        case 'extra_action':
+            return `  ${label(event.unitId)} age de novo`;
+
+        case 'summoned':
+            return `    ${event.unit.name} (${event.unit.team}) se ergue [${event.unit.hp}/${event.unit.stats.maxHp}]`;
+
+        case 'cleansed':
+            return `    ${label(event.targetId)} é purificado: ${event.statuses.map((status) => STATUS_NAMES[status]).join(', ')}`;
+
         case 'passive_triggered': {
             const passive = getUnit(state, event.unitId).passives?.find((p) => p.id === event.passiveId);
             return `  passiva de ${label(event.unitId)}: ${passive?.name ?? event.passiveId}${event.stacks === undefined ? '' : ` (${event.stacks} carga(s))`}`;
@@ -103,7 +122,7 @@ function main(): void {
     const seed = Number(process.argv[2] ?? 1);
 
     let { state, events } = createBattle({
-        teamA: [getCharacter('piromante'), getCharacter('cavaleiro'), getCharacter('clerigo')],
+        teamA: [getCharacter('piromante'), getCharacter('cavaleiro'), getCharacter('sacerdote')],
         teamB: [getCharacter('barbaro'), getCharacter('criomante'), getCharacter('guardiao')],
         seed,
     });

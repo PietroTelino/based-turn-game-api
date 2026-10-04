@@ -56,7 +56,7 @@ nem `L`, para poder ser ditado sem confusão.
 
 ```json
 POST /api/rooms/K7QF2M/ready
-{ "team": ["piromante", "cavaleiro", "clerigo", "driade", "arqueiro"] }
+{ "team": ["piromante", "cavaleiro", "sacerdote", "driade", "arqueiro"] }
 ```
 
 O time segue a regra de qualquer batalha: exatamente 5 personagens, sem
@@ -70,7 +70,7 @@ já vem com `status: "started"` e o `battleId`.
     "code": "K7QF2M",
     "status": "selecting",
     "role": "host",
-    "you": { "ready": true, "team": ["piromante", "cavaleiro", "clerigo", "driade", "arqueiro"] },
+    "you": { "ready": true, "team": ["piromante", "cavaleiro", "sacerdote", "driade", "arqueiro"] },
     "opponent": { "name": "Karinne", "ready": false },
     "battleId": null,
     "createdAt": "2026-10-03T14:00:00.000Z"

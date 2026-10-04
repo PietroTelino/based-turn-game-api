@@ -637,15 +637,15 @@ describe('golpe de execução (perTargetMissingHp)', () => {
 });
 
 describe('passivas do catálogo', () => {
-    it('Clérigo: a Aura Restauradora cura os aliados feridos a cada vez dele, sem gastar energia', () => {
-        const opening = createBattle({ teamA: [getCharacter('clerigo'), getCharacter('cavaleiro')], teamB: [getCharacter('guardiao')], seed: 1 }).state;
+    it('Sacerdote: a Aura Restauradora cura os aliados feridos a cada vez dele, sem gastar energia', () => {
+        const opening = createBattle({ teamA: [getCharacter('sacerdote'), getCharacter('cavaleiro')], teamB: [getCharacter('guardiao')], seed: 1 }).state;
 
         assert.equal(opening.activeUnitId, 'A1');
-        assert.ok(!getCharacter('clerigo').skills.some((item) => item.id === 'clerigo.luz-restauradora'), 'a habilidade virou passiva');
+        assert.ok(!getCharacter('sacerdote').skills.some((item) => item.id === 'sacerdote.luz-restauradora'), 'a habilidade virou passiva');
 
         getUnit(opening, 'A2').hp = 500;
 
-        let result = applyAction(opening, { unitId: 'A1', skillId: 'clerigo.raio-de-luz', targetId: 'B1' });
+        let result = applyAction(opening, { unitId: 'A1', skillId: 'sacerdote.raio-de-luz', targetId: 'B1' });
 
         while (result.state.activeUnitId !== 'A1') {
             const actor = getUnit(result.state, result.state.activeUnitId ?? '');
@@ -656,18 +656,18 @@ describe('passivas do catálogo', () => {
 
         const trigger = eventsOfType(result.events, 'passive_triggered')[0];
 
-        assert.equal(trigger?.passiveId, 'clerigo.aura-restauradora');
+        assert.equal(trigger?.passiveId, 'sacerdote.aura-restauradora');
         assert.ok(trigger?.targetIds.includes('A2'));
         assert.equal(result.state.energy.A, result.state.turnEnergy, 'a passiva não custa energia');
         // ATK 160 x 0,4 = 64 de cura.
         assert.ok(eventsOfType(result.events, 'heal').some((event) => event.targetId === 'A2' && event.amount === 64));
     });
 
-    it('Clérigo: depois da Bênção, a Aura Restauradora cura 80% a mais nas duas vezes seguintes, e só nelas', () => {
+    it('Sacerdote: depois da Bênção, a Aura Restauradora cura 80% a mais nas duas vezes seguintes, e só nelas', () => {
         // O Cavaleiro inimigo tem vida de sobra para a batalha não acabar no meio do teste.
-        let state = createBattle({ teamA: [getCharacter('clerigo'), getCharacter('cavaleiro')], teamB: [getCharacter('cavaleiro')], seed: 1 }).state;
+        let state = createBattle({ teamA: [getCharacter('sacerdote'), getCharacter('cavaleiro')], teamB: [getCharacter('cavaleiro')], seed: 1 }).state;
 
-        /** Joga até a próxima vez do Clérigo e devolve quanto a aura curou o Cavaleiro (A2) nela. */
+        /** Joga até a próxima vez do Sacerdote e devolve quanto a aura curou o Cavaleiro (A2) nela. */
         function nextAuraHeal(first: { skillId: string; targetId?: string }): number {
             // Mantém o Cavaleiro bem ferido, para a cura nunca ser cortada pela vida máxima.
             getUnit(state, 'A2').hp = 300;
@@ -685,18 +685,18 @@ describe('passivas do catálogo', () => {
 
             state = result.state;
 
-            const from = result.events.findIndex((event) => event.type === 'passive_triggered' && event.passiveId === 'clerigo.aura-restauradora');
+            const from = result.events.findIndex((event) => event.type === 'passive_triggered' && event.passiveId === 'sacerdote.aura-restauradora');
 
             return eventsOfType(result.events.slice(from), 'heal').find((event) => event.targetId === 'A2')?.amount ?? 0;
         }
 
-        const attack = { skillId: 'clerigo.raio-de-luz', targetId: 'B1' };
+        const attack = { skillId: 'sacerdote.raio-de-luz', targetId: 'B1' };
 
         // Sem a Bênção: ATK 160 x 0,4 = 64.
         assert.equal(nextAuraHeal(attack), 64);
 
-        // Com a Bênção o ataque do Clérigo sobe 20% (192 x 0,4 = 76,8) e a aura cura 80% a mais: 138.
-        assert.equal(nextAuraHeal({ skillId: 'clerigo.bencao' }), 138);
+        // Com a Bênção o ataque do Sacerdote sobe 20% (192 x 0,4 = 76,8) e a aura cura 80% a mais: 138.
+        assert.equal(nextAuraHeal({ skillId: 'sacerdote.bencao' }), 138);
         assert.equal(getUnit(state, 'A1').statuses.find((status) => status.kind === 'passive_up')?.turns, 2);
         assert.equal(nextAuraHeal(attack), 138);
         assert.equal(getUnit(state, 'A1').statuses.find((status) => status.kind === 'passive_up')?.turns, 1);

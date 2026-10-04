@@ -43,7 +43,7 @@ rotas de batalha e de sala respondem 500. O resto da API não é afetado.
 
 ```json
 POST /api/battles
-{ "team": ["piromante", "cavaleiro", "clerigo", "driade", "arqueiro"] }
+{ "team": ["piromante", "cavaleiro", "sacerdote", "driade", "arqueiro"] }
 ```
 
 Toda batalha é 5 contra 5: `team` precisa ter exatamente 5 ids, sem repetir

@@ -4,6 +4,8 @@
  * Ao criar um arquivo de teste, importe-o aqui.
  */
 import './engine.test';
+import './forms.test';
+import './summons.test';
 import './statuses.test';
 import './passives.test';
 import './ai.test';

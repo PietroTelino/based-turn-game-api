@@ -73,6 +73,15 @@ describe('rotas /api/battles', () => {
         assert.equal(body.length, CHARACTERS.length);
         assert.deepEqual(Object.keys(body[0]).sort(), ['id', 'name', 'passives', 'role', 'skills', 'stats']);
         assert.ok(body.every((character: { passives: unknown[] }) => character.passives.length >= 1), 'todo personagem vem com a passiva');
+
+        const druida = body.find((character: { id: string }) => character.id === 'druida');
+
+        assert.deepEqual(druida.forms.map((form: { id: string }) => form.id), ['urso', 'lobo'], 'quem se transforma vem com as formas');
+
+        const necromante = body.find((character: { id: string }) => character.id === 'necromante');
+
+        assert.deepEqual(necromante.summons.map((summon: { id: string }) => summon.id), ['esqueleto'], 'quem invoca vem com as invocações');
+        assert.ok(!body.some((character: { id: string }) => character.id === 'esqueleto'), 'a invocação não é um personagem do catálogo');
     });
 
     it('fluxo completo: criar, buscar, jogar e listar', async () => {

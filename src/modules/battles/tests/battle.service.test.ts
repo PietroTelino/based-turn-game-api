@@ -23,7 +23,7 @@ function setup(teamSize = 1) {
     return { store, service };
 }
 
-const FIVE = ['barbaro', 'criomante', 'guardiao', 'clerigo', 'arqueiro'];
+const FIVE = ['barbaro', 'criomante', 'guardiao', 'sacerdote', 'arqueiro'];
 
 function rejectsWith(promise: Promise<unknown>, code: BattleErrorCode): Promise<void> {
     return assert.rejects(promise, (error: unknown) => error instanceof BattleError && error.code === code, code);
@@ -122,7 +122,7 @@ describe('BattleService: criar batalha', () => {
         }
 
         await rejectsWith(service.create(PLAYER, { team: [...FIVE, 'ladino'] }), 'INVALID_TEAM');
-        await rejectsWith(service.create(PLAYER, { team: ['barbaro', 'barbaro', 'guardiao', 'clerigo', 'arqueiro'] }), 'INVALID_TEAM');
+        await rejectsWith(service.create(PLAYER, { team: ['barbaro', 'barbaro', 'guardiao', 'sacerdote', 'arqueiro'] }), 'INVALID_TEAM');
         await rejectsWith(service.create(PLAYER, { team: FIVE, enemyTeam: ['cavaleiro'] }), 'INVALID_TEAM');
         await rejectsWith(service.create(PLAYER, { team: FIVE, enemyTeam: ['cavaleiro', 'ladino', 'vampiro', 'driade', 'banshee', 'piromante'] }), 'INVALID_TEAM');
     });
@@ -132,7 +132,7 @@ describe('BattleService: criar batalha', () => {
 
         await rejectsWith(service.create(PLAYER, { team: ['piromante', 'piromante'] }), 'INVALID_TEAM');
         await rejectsWith(service.create(PLAYER, { team: ['piromante', 'nao-existe'] }), 'UNKNOWN_CHARACTER');
-        await rejectsWith(service.create(PLAYER, { team: ['piromante', 'clerigo'], enemyTeam: ['cavaleiro', 'nao-existe'] }), 'UNKNOWN_CHARACTER');
+        await rejectsWith(service.create(PLAYER, { team: ['piromante', 'sacerdote'], enemyTeam: ['cavaleiro', 'nao-existe'] }), 'UNKNOWN_CHARACTER');
     });
 });
 
@@ -204,10 +204,39 @@ describe('BattleService: jogar', () => {
         assert.ok(rejected[0]?.reason instanceof BattleError && rejected[0].reason.code === 'BATTLE_CONFLICT');
     });
 
+    it('transformação com ação extra: o jogador continua na vez, e a IA faz as duas jogadas na mesma resposta', async () => {
+        const { store, service } = setup(1);
+        const created = await service.create(PLAYER, { team: ['druida'], enemyTeam: ['cavaleiro'], seed: 1 });
+
+        // O Druida (112 de velocidade) age antes do Cavaleiro (88).
+        assert.equal(created.battle.state.activeUnitId, 'A1');
+
+        const shifted = await service.act(PLAYER, created.battle.id, { unitId: 'A1', skillId: 'druida.forma-de-lobo' });
+
+        assert.equal(shifted.battle.state.activeUnitId, 'A1', 'a vez continua com o Druida');
+        assert.ok(shifted.events.some((event) => event.type === 'extra_action'));
+        assert.ok(!shifted.events.some((event) => event.type === 'skill_used' && event.team === 'B'), 'a IA ainda não jogou');
+        assert.deepEqual(shifted.battle.availableActions.map((option) => option.skill.id), ['druida.mordida', 'druida.dilacerar', 'druida.frenesi']);
+        assert.equal((await store.findById(created.battle.id))?.step, created.battle.state.step + 1, 'a ação extra é outra vez no relógio da trava');
+
+        // Do outro lado: um Druida da IA se transforma e ataca antes de devolver a vez.
+        const versusAi = await service.create(PLAYER, { team: ['cavaleiro'], enemyTeam: ['druida'], seed: 1 });
+        const used = versusAi.events.filter((event) => event.type === 'skill_used').map((event) => (event.type === 'skill_used' ? event.skillId : ''));
+
+        assert.deepEqual(used, ['druida.forma-de-lobo', 'druida.frenesi']);
+        assert.equal(versusAi.battle.state.activeUnitId, 'A1');
+    });
+
+    it('uma invocação não pode ser escolhida para o time', async () => {
+        const { service } = setup(1);
+
+        await rejectsWith(service.create(PLAYER, { team: ['esqueleto'] }), 'UNKNOWN_CHARACTER');
+    });
+
     it('a batalha chega ao fim, registra o vencedor e não aceita mais ações', async () => {
         const { store, service } = setup(3);
         let { battle } = await service.create(PLAYER, {
-            team: ['piromante', 'cavaleiro', 'clerigo'],
+            team: ['piromante', 'cavaleiro', 'sacerdote'],
             enemyTeam: ['barbaro', 'criomante', 'guardiao'],
             seed: 1,
         });
@@ -309,7 +338,7 @@ describe('BattleService: jogar', () => {
 
         await service.create(PLAYER, { team: ['piromante'], seed: 1 });
         await service.create(PLAYER, { team: ['criomante'], seed: 2 });
-        await service.create(OTHER_PLAYER, { team: ['clerigo'], seed: 3 });
+        await service.create(OTHER_PLAYER, { team: ['sacerdote'], seed: 3 });
 
         const battles = await service.list(PLAYER);
 
@@ -320,7 +349,7 @@ describe('BattleService: jogar', () => {
 });
 
 describe('BattleService: batalha de treino (tutorial)', () => {
-    const TRAINING_TEAM = ['cavaleiro', 'barbaro', 'piromante', 'arqueiro', 'clerigo'];
+    const TRAINING_TEAM = ['cavaleiro', 'barbaro', 'piromante', 'arqueiro', 'sacerdote'];
     const TRAINING_ENEMY = ['guardiao', 'vampiro', 'espadachim', 'criomante', 'driade'];
 
     it('a marca de treino vai no estado, chega à tela e continua lá depois de cada jogada', async () => {
@@ -515,7 +544,7 @@ describe('BattleService: batalha entre dois jogadores', () => {
     });
 
     it('uma batalha inteira, com cada lado jogando na sua vez, chega ao fim e aparece na lista dos dois', async () => {
-        const { store, service, id } = await versus(3, ['piromante', 'cavaleiro', 'clerigo'], ['barbaro', 'criomante', 'guardiao']);
+        const { store, service, id } = await versus(3, ['piromante', 'cavaleiro', 'sacerdote'], ['barbaro', 'criomante', 'guardiao']);
         let view = await service.get(HOST, id);
 
         for (let i = 0; view.status === 'in_progress'; i++) {

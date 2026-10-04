@@ -20,12 +20,29 @@ import type { CharacterDefinition } from '../types';
  *   queimadura, veneno e escudo; a fração do atributo para bônus e
  *   penalidades (0.3 = 30%) e para `passive_up`, que fortalece a passiva de
  *   começo de vez de quem o carrega (0.8 = 80% a mais de cura ou dano); 0
- *   para atordoamento;
+ *   para atordoamento e provocação;
+ * - `bleed` (sangramento) é dano por turno como queimadura e veneno, mas é um
+ *   status à parte: os três podem estar no mesmo alvo;
+ * - o efeito `cleanse` é a purificação: tira do alvo os efeitos negativos
+ *   (atordoamento, queimadura, veneno e as penalidades de atributo);
  * - todo personagem tem pelo menos uma passiva (`passives`), que ninguém usa:
  *   vale sozinha. A maioria deixa as habilidades do próprio personagem mais
  *   fortes; as de começo de vez (`turn_start`) agem por conta própria. Os
  *   tipos estão em PassiveEffect (types.ts), e a descrição precisa dizer os
- *   mesmos números que estão em `effect`.
+ *   mesmos números que estão em `effect`;
+ * - um personagem pode ter `forms`: outras formas em que ele se transforma
+ *   com o efeito `transform` (o urso e o lobo do Druida). Cada forma tem os
+ *   próprios atributos, habilidades e passivas, e segue as mesmas regras de
+ *   um personagem: a primeira habilidade é o ataque básico, no máximo três
+ *   ativas. Os ids continuam "<personagem>.<habilidade>". A tela procura a
+ *   ilustração da forma em "<personagem>-<forma>";
+ * - `heal_down` reduz a cura que o alvo recebe (`power` 0.6 = 60% a menos), de
+ *   qualquer origem: habilidade, passiva ou roubo de vida;
+ * - um personagem pode ter `summons`: unidades que ele invoca com o efeito
+ *   `summon` numa habilidade de alvo `corpse` (o Guerreiro Esqueleto do
+ *   Necromante). A invocação tem o mesmo formato de uma forma, mas o id dela
+ *   é o de uma unidade própria: as habilidades são "<invocação>.<habilidade>"
+ *   e a ilustração é "<invocação>.webp". Ela não aparece na escolha de time.
  */
 export const CHARACTERS: CharacterDefinition[] = [
     {
@@ -114,12 +131,13 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'cavaleiro.brado-de-guerra',
                 name: 'Brado de Guerra',
-                description: 'Atinge todos os inimigos e reduz o ataque deles por 2 turnos.',
+                description: 'Provoca os inimigos por 2 turnos: os golpes de alvo único deles só podem mirar no Cavaleiro. Também reduz o ataque deles.',
                 energyCost: 2,
                 target: 'all-enemies',
                 element: 'physical',
                 effects: [
-                    { type: 'damage', power: 0.9 },
+                    // Provocação: fica no próprio Cavaleiro, e quem escolhe alvo é obrigado a mirar nele.
+                    { type: 'status', status: 'taunt', turns: 2, power: 0, to: 'self' },
                     { type: 'status', status: 'atk_down', turns: 2, power: 0.2 },
                 ],
             },
@@ -135,15 +153,15 @@ export const CHARACTERS: CharacterDefinition[] = [
         ],
     },
     {
-        id: 'clerigo',
-        name: 'Clérigo',
+        id: 'sacerdote',
+        name: 'Sacerdote',
         role: 'support',
         stats: { maxHp: 740, atk: 160, def: 40, speed: 120, critChance: 0.05, critDamage: 1.5 },
         skills: [
             {
-                id: 'clerigo.raio-de-luz',
+                id: 'sacerdote.raio-de-luz',
                 name: 'Raio de Luz',
-                description: 'Atinge um inimigo com um raio de luz.',
+                description: 'Lança um raio de luz em um inimigo.',
                 energyCost: 0,
                 target: 'single-enemy',
                 element: 'light',
@@ -153,18 +171,19 @@ export const CHARACTERS: CharacterDefinition[] = [
                 ],
             },
             {
-                id: 'clerigo.toque-curativo',
+                id: 'sacerdote.toque-curativo',
                 name: 'Toque Curativo',
-                description: 'Recupera a vida de um aliado.',
+                description: 'Cura um aliado e remove os efeitos negativos dele.',
                 energyCost: 1,
                 target: 'single-ally',
                 element: 'light',
                 effects: [
+                    { type: 'cleanse' },
                     { type: 'heal', power: 1.8 },
                 ],
             },
             {
-                id: 'clerigo.bencao',
+                id: 'sacerdote.bencao',
                 name: 'Bênção',
                 description: 'Aumenta a velocidade e o ataque dos aliados por 2 turnos. Nesse tempo, a Aura Restauradora cura 80% a mais.',
                 energyCost: 2,
@@ -173,18 +192,18 @@ export const CHARACTERS: CharacterDefinition[] = [
                 effects: [
                     { type: 'status', status: 'speed_up', turns: 2, power: 0.3 },
                     { type: 'status', status: 'atk_up', turns: 2, power: 0.2 },
-                    // Fortalece a passiva do próprio Clérigo: as duas próximas curas da Aura Restauradora.
+                    // Fortalece a passiva do próprio Sacerdote: as duas próximas curas da Aura Restauradora.
                     { type: 'status', status: 'passive_up', turns: 2, power: 0.8, to: 'self' },
                 ],
             },
         ],
         passives: [
             // Era a habilidade Luz Restauradora (cura em área, 3 de energia): virou
-            // uma cura menor que acontece sozinha a cada vez do Clérigo.
+            // uma cura menor que acontece sozinha a cada vez do Sacerdote.
             {
-                id: 'clerigo.aura-restauradora',
+                id: 'sacerdote.aura-restauradora',
                 name: 'Aura Restauradora',
-                description: 'No começo da vez do Clérigo, os aliados feridos recuperam vida igual a 40% do ataque dele.',
+                description: 'No começo da vez do Sacerdote, os aliados feridos recuperam vida igual a 40% do ataque dele.',
                 element: 'light',
                 effect: { type: 'turn_start', target: 'all-allies', effects: [{ type: 'heal', power: 0.4 }] },
             },
@@ -469,11 +488,12 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'driade.abraco-da-floresta',
                 name: 'Abraço da Floresta',
-                description: 'Recupera a vida de um aliado e aumenta a defesa dele por 2 turnos.',
+                description: 'Cura um aliado, remove os efeitos negativos dele e aumenta a defesa por 2 turnos.',
                 energyCost: 1,
                 target: 'single-ally',
                 element: 'nature',
                 effects: [
+                    { type: 'cleanse' },
                     { type: 'heal', power: 1.7 },
                     { type: 'status', status: 'def_up', turns: 2, power: 0.25 },
                 ],
@@ -481,7 +501,7 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'driade.florescer',
                 name: 'Florescer',
-                description: 'Recupera a vida de todos os aliados e aumenta a defesa deles por 2 turnos.',
+                description: 'Cura todos os aliados e aumenta a defesa deles por 2 turnos.',
                 energyCost: 2,
                 target: 'all-allies',
                 element: 'nature',
@@ -559,7 +579,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 name: 'Ponto Fraco',
                 description: 'O Ladino tem 25% a mais de chance de crítico contra inimigos com algum efeito negativo.',
                 element: 'physical',
-                effect: { type: 'crit_chance_bonus', amount: 0.25, when: { type: 'target_has_status', statuses: ['burn', 'poison', 'stun', 'atk_down', 'def_down', 'speed_down'] } },
+                effect: { type: 'crit_chance_bonus', amount: 0.25, when: { type: 'target_has_status', statuses: ['burn', 'poison', 'bleed', 'heal_down', 'stun', 'atk_down', 'def_down', 'speed_down'] } },
             },
         ],
     },
@@ -668,6 +688,259 @@ export const CHARACTERS: CharacterDefinition[] = [
                 element: 'physical',
                 effect: { type: 'damage_bonus', amount: 0.5, when: { type: 'target_hp_above', ratio: 0.7 } },
                 also: [{ type: 'status_on_hit', status: 'def_down', turns: 2, power: 0.2 }],
+            },
+        ],
+    },
+    {
+        // Começa humano, quase só com o ataque básico: o jogo dele é escolher a
+        // forma. Transformar-se custa 1 de energia e não gasta a vez (passiva).
+        id: 'druida',
+        name: 'Druida',
+        role: 'shapeshifter',
+        stats: { maxHp: 820, atk: 175, def: 45, speed: 112, critChance: 0.1, critDamage: 1.5 },
+        skills: [
+            {
+                id: 'druida.golpe-de-cajado',
+                name: 'Golpe de Cajado',
+                description: 'Golpeia um inimigo com o cajado.',
+                energyCost: 0,
+                target: 'single-enemy',
+                element: 'nature',
+                effects: [
+                    { type: 'damage', power: 1.0 },
+                ],
+            },
+            {
+                id: 'druida.forma-de-urso',
+                name: 'Forma de Urso',
+                description: 'Vira urso por 3 turnos: mais vida e defesa, provoca e recupera vida ao bater.',
+                energyCost: 1,
+                target: 'self',
+                element: 'nature',
+                effects: [
+                    { type: 'transform', form: 'urso', turns: 3 },
+                ],
+            },
+            {
+                id: 'druida.forma-de-lobo',
+                name: 'Forma de Lobo',
+                description: 'Vira lobo por 3 turnos: veloz, de ataque alto, e todo golpe faz o alvo sangrar.',
+                energyCost: 1,
+                target: 'self',
+                element: 'nature',
+                effects: [
+                    { type: 'transform', form: 'lobo', turns: 3 },
+                ],
+            },
+        ],
+        passives: [
+            {
+                id: 'druida.chamado-selvagem',
+                name: 'Chamado Selvagem',
+                description: 'Ao se transformar, o Druida age de novo na mesma vez.',
+                element: 'nature',
+                effect: { type: 'extra_action_on_transform' },
+            },
+        ],
+        forms: [
+            {
+                // Tanque: aguenta, provoca e se sustenta com roubo de vida.
+                id: 'urso',
+                name: 'Urso',
+                stats: { maxHp: 1300, atk: 165, def: 95, speed: 92, critChance: 0.05, critDamage: 1.5 },
+                skills: [
+                    {
+                        id: 'druida.patada',
+                        name: 'Patada',
+                        description: 'Golpeia um inimigo com a pata.',
+                        energyCost: 0,
+                        target: 'single-enemy',
+                        element: 'nature',
+                        effects: [
+                            { type: 'damage', power: 1.0 },
+                        ],
+                    },
+                    {
+                        id: 'druida.rugido',
+                        name: 'Rugido',
+                        description: 'Provoca os inimigos e aumenta a própria defesa por 2 turnos: os golpes de alvo único deles só podem mirar no urso.',
+                        energyCost: 1,
+                        target: 'self',
+                        element: 'nature',
+                        effects: [
+                            { type: 'status', status: 'taunt', turns: 2, power: 0 },
+                            { type: 'status', status: 'def_up', turns: 2, power: 0.3 },
+                        ],
+                    },
+                    {
+                        id: 'druida.esmagar',
+                        name: 'Esmagar',
+                        description: 'Um golpe pesado que reduz o ataque do alvo por 2 turnos.',
+                        energyCost: 2,
+                        target: 'single-enemy',
+                        element: 'nature',
+                        effects: [
+                            { type: 'damage', power: 1.4 },
+                            { type: 'status', status: 'atk_down', turns: 2, power: 0.3 },
+                        ],
+                    },
+                ],
+                passives: [
+                    {
+                        id: 'druida.vigor-do-urso',
+                        name: 'Vigor do Urso',
+                        description: 'Os golpes do urso devolvem como vida 40% do dano causado.',
+                        element: 'nature',
+                        effect: { type: 'lifesteal', amount: 0.4 },
+                    },
+                ],
+            },
+            {
+                // Dano: veloz, crítico alto e sangramento em todo golpe.
+                id: 'lobo',
+                name: 'Lobo',
+                stats: { maxHp: 720, atk: 215, def: 32, speed: 138, critChance: 0.3, critDamage: 1.7 },
+                skills: [
+                    {
+                        id: 'druida.mordida',
+                        name: 'Mordida',
+                        description: 'Morde um inimigo.',
+                        energyCost: 0,
+                        target: 'single-enemy',
+                        element: 'physical',
+                        effects: [
+                            { type: 'damage', power: 1.0 },
+                        ],
+                    },
+                    {
+                        id: 'druida.dilacerar',
+                        name: 'Dilacerar',
+                        description: 'Dois golpes de garra no mesmo inimigo. Cada um pode ser crítico.',
+                        energyCost: 1,
+                        target: 'single-enemy',
+                        element: 'physical',
+                        effects: [
+                            { type: 'damage', power: 0.85 },
+                            { type: 'damage', power: 0.85 },
+                        ],
+                    },
+                    {
+                        id: 'druida.frenesi',
+                        name: 'Frenesi',
+                        description: 'Avança sobre todos os inimigos, que saem sangrando.',
+                        energyCost: 2,
+                        target: 'all-enemies',
+                        element: 'physical',
+                        effects: [
+                            { type: 'damage', power: 0.9 },
+                        ],
+                    },
+                ],
+                passives: [
+                    {
+                        id: 'druida.presas-afiadas',
+                        name: 'Presas Afiadas',
+                        description: 'Todo golpe do lobo faz o alvo sangrar por 2 turnos: dano por turno igual a 30% do ataque dele.',
+                        element: 'physical',
+                        effect: { type: 'status_on_hit', status: 'bleed', turns: 2, power: 0.3 },
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        // Mago de maldição: corta a cura do outro time e, conforme os aliados
+        // caem, ergue os cadáveres como Guerreiros Esqueletos.
+        id: 'necromante',
+        name: 'Necromante',
+        role: 'mage',
+        stats: { maxHp: 730, atk: 195, def: 35, speed: 106, critChance: 0.1, critDamage: 1.5 },
+        skills: [
+            {
+                id: 'necromante.toque-da-morte',
+                name: 'Toque da Morte',
+                description: 'Fere um inimigo, que recebe 60% a menos de cura por 2 turnos.',
+                energyCost: 0,
+                target: 'single-enemy',
+                element: 'shadow',
+                ranged: true,
+                effects: [
+                    { type: 'damage', power: 0.9 },
+                    { type: 'status', status: 'heal_down', turns: 2, power: 0.6 },
+                ],
+            },
+            {
+                id: 'necromante.erguer-esqueleto',
+                name: 'Erguer Esqueleto',
+                description: 'Ergue um aliado caído como Guerreiro Esqueleto, que já age neste turno.',
+                energyCost: 1,
+                target: 'corpse',
+                element: 'shadow',
+                effects: [
+                    { type: 'summon', summon: 'esqueleto' },
+                ],
+            },
+            {
+                id: 'necromante.praga',
+                name: 'Praga',
+                description: 'Fere todos os inimigos, que recebem 60% a menos de cura por 2 turnos.',
+                energyCost: 1,
+                target: 'all-enemies',
+                element: 'shadow',
+                effects: [
+                    { type: 'damage', power: 0.8 },
+                    { type: 'status', status: 'heal_down', turns: 2, power: 0.6 },
+                ],
+            },
+        ],
+        passives: [
+            {
+                id: 'necromante.senhor-dos-mortos',
+                name: 'Senhor dos Mortos',
+                description: 'Conta os aliados caídos que ainda podem ser erguidos.',
+                element: 'shadow',
+                effect: { type: 'count_corpses' },
+            },
+        ],
+        summons: [
+            {
+                id: 'esqueleto',
+                name: 'Guerreiro Esqueleto',
+                stats: { maxHp: 650, atk: 180, def: 45, speed: 104, critChance: 0.15, critDamage: 1.5 },
+                skills: [
+                    {
+                        id: 'esqueleto.espada-enferrujada',
+                        name: 'Espada Enferrujada',
+                        description: 'Golpeia um inimigo com a espada.',
+                        energyCost: 0,
+                        target: 'single-enemy',
+                        element: 'physical',
+                        effects: [
+                            { type: 'damage', power: 1.0 },
+                        ],
+                    },
+                    {
+                        id: 'esqueleto.golpe-profano',
+                        name: 'Golpe Profano',
+                        description: 'Um golpe forte que reduz a defesa do alvo por 2 turnos.',
+                        energyCost: 1,
+                        target: 'single-enemy',
+                        element: 'shadow',
+                        effects: [
+                            { type: 'damage', power: 1.4 },
+                            { type: 'status', status: 'def_down', turns: 2, power: 0.2 },
+                        ],
+                    },
+                ],
+                passives: [
+                    {
+                        id: 'esqueleto.servo-da-maldicao',
+                        name: 'Servo da Maldição',
+                        description: 'Os golpes do esqueleto causam 30% a mais de dano em inimigos com a cura reduzida.',
+                        element: 'shadow',
+                        effect: { type: 'damage_bonus', amount: 0.3, when: { type: 'target_has_status', statuses: ['heal_down'] } },
+                    },
+                ],
             },
         ],
     },

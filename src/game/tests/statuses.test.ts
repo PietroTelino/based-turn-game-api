@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { chooseAction } from '../ai';
 import { MIN_STAT_FACTOR } from '../constants';
-import { CHARACTERS } from '../data/characters';
-import { applyAction, createBattle, getEffectiveStats, getUnit } from '../engine';
-import type { BattleState, SkillDefinition, SkillEffect, StatusEffect, StatusKind } from '../types';
-import { basicAttackTurn, eventsOfType, makeCharacter } from './helpers';
+import { CHARACTERS, getCharacter } from '../data/characters';
+import { applyAction, createBattle, getAvailableActions, getEffectiveStats, getUnit, NEGATIVE_STATUSES } from '../engine';
+import type { BattleState, PassiveDefinition, SkillDefinition, SkillEffect, StatusEffect, StatusKind } from '../types';
+import { assertRuleError, basicAttackTurn, eventsOfType, makeCharacter } from './helpers';
 
 function statusSkill(id: string, effects: SkillEffect[], target: SkillDefinition['target'] = 'single-enemy'): SkillDefinition {
     return { id, name: id, description: '', energyCost: 0, target, effects };
@@ -350,6 +350,217 @@ describe('status: compatibilidade e consistência', () => {
                     ({ state, events } = applyAction(state, chooseAction(state)));
                 }
             }
+        }
+    });
+});
+
+describe('status: provocação', () => {
+    const taunt = statusSkill('a.taunt', [{ type: 'status', status: 'taunt', turns: 2, power: 0, to: 'self' }], 'self');
+    const blast = statusSkill('b.blast', [{ type: 'damage', power: 1 }], 'all-enemies');
+
+    /** A1 (veloz, provoca), B1 (com um golpe em área) e A2 (lento). A ordem de cada turno é A1, B1, A2. */
+    function setup() {
+        return createBattle({
+            teamA: [makeCharacter('a', { speed: 200, maxHp: 100_000 }, [taunt]), makeCharacter('ally', { speed: 50, maxHp: 100_000 })],
+            teamB: [makeCharacter('b', { speed: 100, maxHp: 100_000 }, [blast])],
+            seed: 1,
+        }).state;
+    }
+
+    function targetsOf(state: BattleState, skillId: string): string[] {
+        return getAvailableActions(state).find((option) => option.skill.id === skillId)?.targetIds ?? [];
+    }
+
+    it('os golpes de alvo único dos inimigos só podem mirar em quem provoca', () => {
+        const { state, events } = applyAction(setup(), { unitId: 'A1', skillId: 'a.taunt' });
+
+        assert.deepEqual(eventsOfType(events, 'status_applied').map((event) => [event.targetId, event.status, event.turns]), [['A1', 'taunt', 2]]);
+        assert.equal(state.activeUnitId, 'B1');
+        assert.deepEqual(targetsOf(state, 'b.basic'), ['A1']);
+        assertRuleError(() => applyAction(state, { unitId: 'B1', skillId: 'b.basic', targetId: 'A2' }), 'INVALID_TARGET');
+        assert.equal(eventsOfType(applyAction(state, { unitId: 'B1', skillId: 'b.basic', targetId: 'A1' }).events, 'damage')[0]?.targetId, 'A1');
+    });
+
+    it('golpes em área continuam pegando todo mundo', () => {
+        const { state } = applyAction(setup(), { unitId: 'A1', skillId: 'a.taunt' });
+
+        assert.deepEqual(targetsOf(state, 'b.blast'), ['A1', 'A2']);
+        assert.deepEqual(eventsOfType(applyAction(state, { unitId: 'B1', skillId: 'b.blast' }).events, 'damage').map((event) => event.targetId), ['A1', 'A2']);
+    });
+
+    it('sem ninguém provocando, qualquer inimigo pode ser alvo', () => {
+        const state = basicAttackTurn(setup()).state;
+
+        assert.equal(state.activeUnitId, 'B1');
+        assert.deepEqual(targetsOf(state, 'b.basic'), ['A1', 'A2']);
+    });
+
+    it('dura dois turnos: o inimigo fica preso em duas vezes e solto na terceira', () => {
+        let state = applyAction(setup(), { unitId: 'A1', skillId: 'a.taunt' }).state;
+        const seen: string[][] = [];
+
+        for (let i = 0; i < 3; i++) {
+            state = playUntilTurnOf(state, 'B1').state;
+            seen.push(targetsOf(state, 'b.basic'));
+            state = applyAction(state, { unitId: 'B1', skillId: 'b.blast' }).state;
+        }
+
+        assert.deepEqual(seen, [['A1'], ['A1'], ['A1', 'A2']]);
+        assert.equal(hasTaunt(state), false);
+    });
+
+    it('acaba quando quem provoca é derrotado', () => {
+        const taunted = applyAction(setup(), { unitId: 'A1', skillId: 'a.taunt' }).state;
+
+        getUnit(taunted, 'A1').hp = 1;
+
+        const state = playUntilTurnOf(applyAction(taunted, { unitId: 'B1', skillId: 'b.basic', targetId: 'A1' }).state, 'B1').state;
+
+        assert.equal(getUnit(state, 'A1').hp, 0);
+        assert.deepEqual(targetsOf(state, 'b.basic'), ['A2']);
+    });
+
+    it('não muda o alvo de uma passiva que escolhe sozinha (o inimigo mais veloz)', () => {
+        const roots: PassiveDefinition = {
+            id: 'b.roots',
+            name: 'roots',
+            description: '',
+            effect: { type: 'turn_start', target: 'fastest-enemy', effects: [{ type: 'damage', power: 1 }] },
+        };
+        const state = createBattle({
+            teamA: [makeCharacter('a', { speed: 50, maxHp: 100_000 }, [taunt]), makeCharacter('ally', { speed: 200, maxHp: 100_000 })],
+            teamB: [makeCharacter('b', { speed: 100, maxHp: 100_000 }, [], [roots])],
+            seed: 1,
+        }).state;
+
+        // A1 é lento e provoca; A2 é o mais veloz. A ordem é A2, B1, A1.
+        getUnit(state, 'A1').statuses = [status('taunt')];
+
+        const { events } = basicAttackTurn(state);
+
+        assert.equal(eventsOfType(events, 'passive_triggered')[0]?.targetIds[0], 'A2');
+    });
+
+    function hasTaunt(state: BattleState): boolean {
+        return getUnit(state, 'A1').statuses.some((item) => item.kind === 'taunt');
+    }
+});
+
+describe('efeito: purificação', () => {
+    const purify = statusSkill('a.purify', [{ type: 'cleanse' }, { type: 'heal', power: 1 }], 'single-ally');
+
+    function setup() {
+        return createBattle({
+            teamA: [makeCharacter('a', { speed: 200 }, [purify]), makeCharacter('ally', { speed: 150 })],
+            teamB: [makeCharacter('b', { speed: 100 })],
+            seed: 1,
+        }).state;
+    }
+
+    it('tira os efeitos negativos do alvo e deixa os bônus e o escudo', () => {
+        const state = setup();
+
+        getUnit(state, 'A2').statuses = [
+            status('poison', { value: 50 }),
+            status('atk_up', { value: 0.3 }),
+            status('def_down', { value: 0.3 }),
+            status('shield', { value: 80 }),
+            status('burn', { value: 20 }),
+            status('speed_down', { value: 0.2 }),
+            status('atk_down', { value: 0.2 }),
+        ];
+
+        const { state: after, events } = applyAction(state, { unitId: 'A1', skillId: 'a.purify', targetId: 'A2' });
+
+        assert.deepEqual(getUnit(after, 'A2').statuses.map((item) => item.kind), ['atk_up', 'shield']);
+        assert.deepEqual(eventsOfType(events, 'cleansed'), [
+            { type: 'cleansed', sourceId: 'A1', targetId: 'A2', statuses: ['poison', 'def_down', 'burn', 'speed_down', 'atk_down'] },
+        ]);
+
+        const at = events.findIndex((event) => event.type === 'cleansed');
+        const next = events[at + 1];
+
+        assert.equal(next?.type, 'statuses_changed');
+        assert.equal(eventsOfType(events, 'status_damage').length, 0, 'o veneno saiu antes da vez do aliado');
+    });
+
+    it('tira o atordoamento: o aliado purificado não perde a vez', () => {
+        const state = setup();
+
+        getUnit(state, 'A2').statuses = [status('stun', { turns: 1 })];
+
+        const stunned = basicAttackTurn(state);
+
+        assert.equal(eventsOfType(stunned.events, 'unit_skipped')[0]?.unitId, 'A2');
+
+        const { state: after, events } = applyAction(state, { unitId: 'A1', skillId: 'a.purify', targetId: 'A2' });
+
+        assert.equal(eventsOfType(events, 'unit_skipped').length, 0);
+        assert.equal(after.activeUnitId, 'A2');
+    });
+
+    it('sem nada para tirar, não avisa nada (e o resto da habilidade acontece)', () => {
+        const state = setup();
+
+        getUnit(state, 'A2').hp = 900;
+        getUnit(state, 'A2').statuses = [status('def_up', { value: 0.3 })];
+
+        const { state: after, events } = applyAction(state, { unitId: 'A1', skillId: 'a.purify', targetId: 'A2' });
+
+        assert.equal(eventsOfType(events, 'cleansed').length, 0);
+        assert.equal(getUnit(after, 'A2').hp, 1000);
+        assert.deepEqual(getUnit(after, 'A2').statuses.map((item) => item.kind), ['def_up']);
+    });
+
+    it('os status negativos são exatamente os que atrapalham quem carrega', () => {
+        assert.deepEqual([...NEGATIVE_STATUSES].sort(), ['atk_down', 'bleed', 'burn', 'def_down', 'heal_down', 'poison', 'speed_down', 'stun']);
+    });
+});
+
+describe('catálogo: provocação e purificação', () => {
+    it('Cavaleiro: o Brado de Guerra provoca por 2 turnos e reduz o ataque dos inimigos, sem causar dano', () => {
+        const opening = createBattle({ teamA: [getCharacter('cavaleiro'), getCharacter('sacerdote')], teamB: [getCharacter('barbaro'), getCharacter('arqueiro')], seed: 1 }).state;
+
+        opening.activeUnitId = 'A1';
+        opening.order = ['A1', 'B1', 'B2', 'A2'];
+
+        const { state, events } = applyAction(opening, { unitId: 'A1', skillId: 'cavaleiro.brado-de-guerra' });
+
+        assert.equal(eventsOfType(events, 'damage').length, 0);
+        assert.deepEqual(
+            eventsOfType(events, 'status_applied').map((event) => [event.targetId, event.status, event.turns]),
+            [['A1', 'taunt', 2], ['B1', 'atk_down', 2], ['B2', 'atk_down', 2]],
+        );
+
+        // O Bárbaro e o Arqueiro só podem mirar no Cavaleiro com os golpes de alvo único...
+        for (const option of getAvailableActions(state)) {
+            if (option.requiresTarget) assert.deepEqual(option.targetIds, ['A1'], option.skill.id);
+        }
+
+        // ...mas a Chuva de Flechas ainda pega os dois.
+        const archer = structuredClone(state);
+
+        archer.activeUnitId = 'B2';
+
+        const rain = getAvailableActions(archer).find((option) => option.skill.id === 'arqueiro.chuva-de-flechas');
+
+        assert.deepEqual(rain?.targetIds, ['A1', 'A2']);
+    });
+
+    it('Sacerdote e Dríade: o Toque Curativo e o Abraço da Floresta purificam o aliado antes de curar', () => {
+        for (const [healer, skillId] of [['sacerdote', 'sacerdote.toque-curativo'], ['driade', 'driade.abraco-da-floresta']] as const) {
+            const opening = createBattle({ teamA: [getCharacter(healer), getCharacter('cavaleiro')], teamB: [getCharacter('guardiao')], seed: 1 }).state;
+
+            opening.activeUnitId = 'A1';
+            opening.energy.A = 10;
+            getUnit(opening, 'A2').hp = 500;
+            getUnit(opening, 'A2').statuses = [status('poison', { value: 105, growth: 0.6, ticks: 2 }), status('stun', { turns: 1 })];
+
+            const { state, events } = applyAction(opening, { unitId: 'A1', skillId, targetId: 'A2' });
+
+            assert.deepEqual(eventsOfType(events, 'cleansed').map((event) => [event.targetId, event.statuses]), [['A2', ['poison', 'stun']]], healer);
+            assert.ok(getUnit(state, 'A2').hp > 500, healer);
+            assert.ok(!getUnit(state, 'A2').statuses.some((item) => NEGATIVE_STATUSES.includes(item.kind)), healer);
         }
     });
 });

@@ -13,7 +13,7 @@ const ANA = 'ana-id';
 const BRUNO = 'bruno-id';
 const CAIO = 'caio-id';
 
-const ANA_TEAM = ['barbaro', 'criomante', 'guardiao', 'clerigo', 'arqueiro'];
+const ANA_TEAM = ['barbaro', 'criomante', 'guardiao', 'sacerdote', 'arqueiro'];
 const BRUNO_TEAM = ['cavaleiro', 'ladino', 'vampiro', 'driade', 'banshee'];
 
 /** Salas e batalhas em memória, com o serviço de batalhas de verdade (times de cinco). */
@@ -189,8 +189,8 @@ describe('RoomService: escolher o time e começar', () => {
         const { service, code } = await roomWithTwo();
 
         await rejectsWithBattle(service.ready(ANA, code, ['barbaro']), 'INVALID_TEAM');
-        await rejectsWithBattle(service.ready(ANA, code, ['barbaro', 'barbaro', 'guardiao', 'clerigo', 'arqueiro']), 'INVALID_TEAM');
-        await rejectsWithBattle(service.ready(ANA, code, ['barbaro', 'criomante', 'guardiao', 'clerigo', 'dragao']), 'UNKNOWN_CHARACTER');
+        await rejectsWithBattle(service.ready(ANA, code, ['barbaro', 'barbaro', 'guardiao', 'sacerdote', 'arqueiro']), 'INVALID_TEAM');
+        await rejectsWithBattle(service.ready(ANA, code, ['barbaro', 'criomante', 'guardiao', 'sacerdote', 'dragao']), 'UNKNOWN_CHARACTER');
 
         assert.equal((await service.get(ANA, code)).you.ready, false);
     });

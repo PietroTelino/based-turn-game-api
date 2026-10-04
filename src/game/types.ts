@@ -26,18 +26,30 @@ export interface Stats {
 /**
  * Quem a habilidade atinge.
  * As "single-*" exigem que o jogador escolha um alvo; as outras não.
+ *
+ * 'corpse' é o cadáver de um aliado: uma unidade derrotada do próprio time que
+ * ainda não foi erguida. O motor escolhe sozinho (o primeiro cadáver do time);
+ * sem cadáver, a habilidade não pode ser usada.
  */
-export type TargetType = 'single-enemy' | 'all-enemies' | 'single-ally' | 'all-allies' | 'self';
+export type TargetType = 'single-enemy' | 'all-enemies' | 'single-ally' | 'all-allies' | 'self' | 'corpse';
 
 /**
  * Os efeitos de status que uma unidade pode carregar.
  *
  * - stun: perde a vez.
- * - burn / poison: leva dano no começo de cada turno seu.
+ * - burn / poison / bleed: leva dano no começo de cada turno seu (queimadura,
+ *   veneno e sangramento são três status separados: podem estar juntos).
  * - shield: absorve dano antes da vida.
  * - *_up / *_down: aumenta ou reduz um atributo em uma fração (0.3 = 30%).
  * - passive_up: a passiva de começo de vez da unidade cura e causa dano mais
  *   forte, em uma fração (0.8 = 80% a mais).
+ * - taunt: provocação. Enquanto uma unidade provoca, as habilidades de alvo
+ *   único dos inimigos só podem mirar nela (ou em outra que também provoque).
+ *   Golpes em área e passivas que escolhem o alvo sozinhas não mudam.
+ * - heal_down: a unidade recebe menos cura, em uma fração (0.6 = 60% a menos).
+ *   Vale para toda cura: habilidades, passivas e roubo de vida.
+ * - form: a unidade está transformada (ver FormDefinition). Quando o status
+ *   acaba, ela volta à forma original.
  */
 export type StatusKind =
     | 'stun'
@@ -50,7 +62,11 @@ export type StatusKind =
     | 'def_down'
     | 'speed_up'
     | 'speed_down'
-    | 'passive_up';
+    | 'passive_up'
+    | 'taunt'
+    | 'bleed'
+    | 'heal_down'
+    | 'form';
 
 /** Um status ativo em uma unidade. */
 export interface StatusEffect {
@@ -62,8 +78,8 @@ export interface StatusEffect {
     turns: number;
     /**
      * O significado depende do tipo: dano por turno (burn, poison), pontos
-     * restantes (shield) ou fração (modificadores de atributo e passive_up).
-     * Zero no stun.
+     * restantes (shield) ou fração (modificadores de atributo, passive_up e heal_down).
+     * Zero no stun, no taunt e no form.
      */
     value: number;
     sourceId: string;
@@ -103,11 +119,27 @@ export interface StatusEffect {
  * o ALVO já perdeu, o golpe causa essa porcentagem a mais (1: num alvo com 40%
  * da vida perdida, +40% de dano). Conta em pontos inteiros de porcentagem e
  * soma com os bônus das passivas de quem bate.
+ *
+ * O efeito 'cleanse' é a purificação: tira do alvo todos os status que o
+ * atrapalham (NEGATIVE_STATUSES, em engine.ts). Bônus e escudo ficam.
+ *
+ * O efeito 'transform' muda o alvo para uma das formas dele (`form` é o id em
+ * CharacterDefinition.forms) por `turns` turnos: atributos, habilidades e
+ * passivas passam a ser os da forma, e a vida mantém a mesma proporção.
+ *
+ * O efeito 'summon' ergue o cadáver de um aliado (alvo 'corpse') como uma
+ * invocação de quem usou (`summon` é o id em CharacterDefinition.summons): a
+ * unidade derrotada dá lugar a uma unidade nova, com vida cheia, no mesmo
+ * lugar do time. Ela entra na fila de ação do turno em que é erguida e não
+ * deixa cadáver.
  */
 export type SkillEffect =
     | { type: 'damage'; power: number; drain?: number; perTargetMissingHp?: number }
     | { type: 'heal'; power: number }
-    | { type: 'status'; status: StatusKind; turns: number; power: number; chance?: number; to?: 'target' | 'self' };
+    | { type: 'status'; status: StatusKind; turns: number; power: number; chance?: number; to?: 'target' | 'self' }
+    | { type: 'cleanse' }
+    | { type: 'transform'; form: string; turns: number }
+    | { type: 'summon'; summon: string };
 
 /**
  * Elemento de uma habilidade. Por enquanto não entra em nenhuma conta: serve
@@ -182,6 +214,14 @@ export type PassiveCondition =
  * mesmo que quem renove seja um aliado sem a passiva; se o status acabar, o
  * próximo começa do normal. A conta fica no próprio status (`growth`, `ticks`).
  *
+ * extra_action_on_transform: quando a unidade se transforma (efeito
+ * 'transform' de uma habilidade dela), a vez não acaba: ela age de novo, já
+ * na forma nova. A vez da transformação conta como um dos turnos da forma.
+ *
+ * count_corpses: a passiva conta os cadáveres do time (aliados derrotados que
+ * ainda não foram erguidos). O número fica em `unit.passiveStacks` e é só uma
+ * conta para a tela mostrar: quem usa os cadáveres é o efeito 'summon'.
+ *
  * turn_start é a passiva que age sozinha: no começo da vez da unidade (se ela
  * não estiver atordoada), os `effects` são aplicados no alvo indicado, como
  * se fossem uma habilidade sem custo.
@@ -198,6 +238,8 @@ export type PassiveEffect =
     | { type: 'damage_per_missing_hp'; amount: number }
     | { type: 'status_power'; statuses: StatusKind[]; amount: number }
     | { type: 'status_growth'; statuses: StatusKind[]; amount: number }
+    | { type: 'extra_action_on_transform' }
+    | { type: 'count_corpses' }
     | { type: 'turn_start'; target: 'all-allies' | 'fastest-enemy'; effects: SkillEffect[] };
 
 export interface PassiveDefinition {
@@ -213,7 +255,22 @@ export interface PassiveDefinition {
     ranged?: boolean;
 }
 
-export type CharacterRole = 'attacker' | 'tank' | 'support' | 'assassin' | 'mage' | 'fighter';
+export type CharacterRole = 'attacker' | 'tank' | 'support' | 'assassin' | 'mage' | 'fighter' | 'shapeshifter';
+
+/**
+ * Uma forma em que o personagem pode se transformar (o urso e o lobo do
+ * Druida). Na forma, ele troca os atributos, as habilidades e as passivas
+ * pelos dela; o resto (vida em proporção, status, energia do time) continua.
+ */
+export interface FormDefinition {
+    /** Único dentro do personagem: 'urso', 'lobo'. A tela usa para escolher a ilustração (<personagem>-<forma>). */
+    id: string;
+    name: string;
+    stats: Stats;
+    /** Como no personagem: a primeira é o ataque básico. */
+    skills: SkillDefinition[];
+    passives: PassiveDefinition[];
+}
 
 /** A "ficha" de um personagem: o molde a partir do qual as unidades são criadas. */
 export interface CharacterDefinition {
@@ -225,6 +282,15 @@ export interface CharacterDefinition {
     skills: SkillDefinition[];
     /** Todo personagem tem pelo menos uma passiva. */
     passives: PassiveDefinition[];
+    /** As formas em que ele pode se transformar. A maioria não tem nenhuma. */
+    forms?: FormDefinition[];
+    /**
+     * O que ele invoca com o efeito 'summon' (o Guerreiro Esqueleto do
+     * Necromante). Tem o mesmo formato de uma forma: id, nome, atributos,
+     * habilidades e passivas. O id vira o `characterId` da unidade invocada,
+     * que é o que a tela usa para achar a ilustração.
+     */
+    summons?: FormDefinition[];
 }
 
 /** Um personagem dentro de uma batalha específica. */
@@ -249,8 +315,25 @@ export interface BattleUnit {
      * passivas existirem não têm o campo: nelas ninguém tem passiva.
      */
     passives?: PassiveDefinition[];
-    /** Cargas acumuladas pela passiva da unidade, nas passivas que acumulam (damage_per_drain). */
+    /**
+     * O número que a passiva da unidade guarda: cargas acumuladas
+     * (damage_per_drain) ou cadáveres do time (count_corpses).
+     */
     passiveStacks?: number;
+    /** Só em quem invoca: cópia das invocações dele (CharacterDefinition.summons). */
+    summons?: FormDefinition[];
+    /** A unidade foi invocada (um esqueleto erguido). Quando cai, não deixa cadáver. */
+    summoned?: boolean;
+    /**
+     * Só em quem se transforma. `form` é o id da forma em que a unidade está
+     * agora (ausente = forma original). Enquanto transformada, `stats`,
+     * `skills` e `passives` são os da forma. `forms` e `baseForm` são cópias
+     * de todas as formas e da original (id 'base'), para o estado continuar
+     * autossuficiente e a unidade saber para o que voltar.
+     */
+    form?: string;
+    forms?: FormDefinition[];
+    baseForm?: FormDefinition;
 }
 
 export interface BattleState {
@@ -333,6 +416,8 @@ export type BattleEvent =
     /** Dano de queimadura ou veneno, quando chega a vez de quem carrega o status. */
     | { type: 'status_damage'; targetId: string; status: StatusKind; amount: number; hp: number }
     | { type: 'status_expired'; unitId: string; status: StatusKind }
+    /** `sourceId` purificou `targetId`: `statuses` são os status que saíram. Vem seguido de statuses_changed. */
+    | { type: 'cleansed'; sourceId: string; targetId: string; statuses: StatusKind[] }
     /**
      * A lista completa de status da unidade depois de qualquer mudança
      * (aplicar, expirar, escudo gasto, duração contada). A tela só precisa
@@ -342,6 +427,20 @@ export type BattleEvent =
     /** A unidade perdeu a vez (atordoada). */
     | { type: 'unit_skipped'; unitId: string; status: StatusKind }
     | { type: 'unit_defeated'; unitId: string }
+    /**
+     * A unidade mudou de forma. `form` é o id da forma nova, ou null quando
+     * ela voltou à original. Atributos, habilidades e passivas passam a ser os
+     * da forma (estão em `unit.forms` / `unit.baseForm`); `hp` é a vida depois
+     * da troca, na mesma proporção de antes.
+     */
+    | { type: 'transformed'; unitId: string; form: string | null; hp: number }
+    /**
+     * `sourceId` ergueu um cadáver: no lugar da unidade `unitId` (derrotada)
+     * entra `unit`, a invocação, com o mesmo id. A tela troca uma pela outra.
+     */
+    | { type: 'summoned'; sourceId: string; unitId: string; unit: BattleUnit }
+    /** A vez da unidade não acabou: ela vai agir de novo (passiva extra_action_on_transform). */
+    | { type: 'extra_action'; unitId: string }
     /**
      * A passiva de uma unidade fez diferença agora. Para as passivas de golpe,
      * vem antes do dano que ela mudou, uma vez por ação, e `targetIds` é o

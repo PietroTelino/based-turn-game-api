@@ -1,4 +1,14 @@
-import { calculateHeal, getAvailableActions, getEffectiveStats, getUnit, hasStatus } from './engine';
+import {
+    calculateHeal,
+    DAMAGE_STATUSES,
+    getAvailableActions,
+    getEffectiveStats,
+    getHealingFactor,
+    getStatuses,
+    getStatusTickDamage,
+    getUnit,
+    hasStatus,
+} from './engine';
 import type { AvailableAction, BattleAction, BattleState, BattleUnit } from './types';
 
 /**
@@ -6,11 +16,17 @@ import type { AvailableAction, BattleAction, BattleState, BattleUnit } from './t
  *
  * 1. se algum aliado está com menos da metade da vida, usa a cura que
  *    recupera mais vida no total (em área só compensa com vários feridos);
- * 2. senão, usa a habilidade mais cara que a energia do time permite,
+ * 2. senão, se algum aliado está atordoado ou levando dano pesado de veneno
+ *    ou queimadura, usa uma habilidade que purifica nele;
+ * 3. senão, quem pode erguer um cadáver ergue (uma unidade a mais no time
+ *    vale mais que qualquer golpe); e quem pode se transformar se transforma: na forma mais resistente
+ *    se está com menos da metade da vida, na de mais ataque se está bem;
+ * 4. senão, usa a habilidade mais cara que a energia do time permite,
  *    pulando as de suporte (escudo, bônus) que não acrescentariam nada
  *    porque os alvos já estão com o efeito;
- * 3. ataques miram em quem tem menos vida; suporte vai para o aliado mais
- *    ferido que ainda não tem o efeito.
+ * 5. ataques miram em quem tem menos vida; suporte vai para o aliado mais
+ *    ferido que ainda não tem o efeito. Se um inimigo está provocando, o
+ *    motor só oferece ele como alvo dos golpes de alvo único.
  *
  * Ela fica fora do motor de propósito: o motor não sabe quem escolheu a ação.
  * Para o motor, IA e jogador são a mesma coisa: alguém que manda uma BattleAction.
@@ -27,6 +43,25 @@ export function chooseAction(state: BattleState): BattleAction {
 
     if (heal) {
         return heal;
+    }
+
+    const purify = choosePurify(state, actor, options.filter(isPurify));
+
+    if (purify) {
+        return purify;
+    }
+
+    // Invocação: só aparece como utilizável quando há cadáver e energia.
+    const summon = options.find((option) => option.skill.effects.some((effect) => effect.type === 'summon'));
+
+    if (summon) {
+        return toAction(actor.id, summon, undefined);
+    }
+
+    const shift = chooseForm(actor, options);
+
+    if (shift) {
+        return shift;
     }
 
     const byCost = options.filter((option) => !isHeal(option)).sort((a, b) => b.skill.energyCost - a.skill.energyCost);
@@ -101,6 +136,66 @@ function isHeal(option: AvailableAction): boolean {
     return option.skill.effects.some((effect) => effect.type === 'heal');
 }
 
+function isPurify(option: AvailableAction): boolean {
+    return option.requiresTarget && option.skill.effects.some((effect) => effect.type === 'cleanse');
+}
+
+/** A partir de quanto da vida máxima por turno o veneno ou a queimadura valem uma purificação. */
+const PURIFY_DAMAGE_RATIO = 0.1;
+
+/**
+ * Quanto vale purificar a unidade: 0 se não compensa. Atordoamento vale mais
+ * que tudo (devolve a vez); dano por turno conta a partir de 10% da vida
+ * máxima por turno, e quanto maior, mais urgente.
+ */
+function purifyUrgency(unit: BattleUnit): number {
+    const perTurn = getStatuses(unit)
+        .filter((status) => DAMAGE_STATUSES.includes(status.kind))
+        .reduce((total, status) => total + getStatusTickDamage(status), 0);
+    const ratio = perTurn / unit.stats.maxHp;
+
+    return (hasStatus(unit, 'stun') ? 10 : 0) + (ratio >= PURIFY_DAMAGE_RATIO ? ratio : 0);
+}
+
+/** Purifica o aliado que mais precisa, com a habilidade mais barata que faz isso. */
+function choosePurify(state: BattleState, actor: BattleUnit, options: AvailableAction[]): BattleAction | null {
+    const option = [...options].sort((a, b) => a.skill.energyCost - b.skill.energyCost)[0];
+
+    if (!option) {
+        return null;
+    }
+
+    const target = lowest(state, option.targetIds, (unit) => -purifyUrgency(unit));
+
+    return target && purifyUrgency(target) > 0 ? toAction(actor.id, option, target.id) : null;
+}
+
+/**
+ * Transformação: entre as habilidades que transformam, escolhe pela forma.
+ * Ferida (menos da metade da vida), a unidade vai para a forma com mais vida;
+ * inteira, para a de mais ataque.
+ */
+function chooseForm(actor: BattleUnit, options: AvailableAction[]): BattleAction | null {
+    let best: { option: AvailableAction; score: number } | null = null;
+    const wounded = hpRatio(actor) < 0.5;
+
+    for (const option of options) {
+        for (const effect of option.skill.effects) {
+            const form = effect.type === 'transform' ? actor.forms?.find((item) => item.id === effect.form) : undefined;
+
+            if (!form) continue;
+
+            const score = wounded ? form.stats.maxHp : form.stats.atk;
+
+            if (!best || score > best.score) {
+                best = { option, score };
+            }
+        }
+    }
+
+    return best ? toAction(actor.id, best.option, actor.id) : null;
+}
+
 /** Habilidade que não causa dano nem cura: só aplica status. */
 function isSupport(option: AvailableAction): boolean {
     return option.skill.effects.every((effect) => effect.type === 'status');
@@ -151,7 +246,8 @@ function totalRestored(actor: BattleUnit, option: AvailableAction, targets: Batt
         const amount = calculateHeal(getEffectiveStats(actor), effect.power);
 
         for (const target of targets) {
-            total += Math.min(amount, target.stats.maxHp - target.hp);
+            // Quem está com a cura reduzida recebe menos.
+            total += Math.min(Math.round(amount * getHealingFactor(target)), target.stats.maxHp - target.hp);
         }
     }
 
