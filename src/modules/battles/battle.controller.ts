@@ -100,6 +100,32 @@ export class BattleController {
         }
     };
 
+    /** GET /:id/replay — a batalha encerrada do começo ao fim, para assistir de novo. */
+    replay = async (req: Request, res: Response) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
+            }
+
+            return res.json(await this.service.replay(req.user.id, String(req.params.id)));
+        } catch (error) {
+            return this.handleError(req, res, error);
+        }
+    };
+
+    /** POST /:id/timeout — partida ranqueada: o adversário passou do prazo e quem espera pede a vitória. */
+    timeout = async (req: Request, res: Response) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
+            }
+
+            return res.json(await this.service.claimTimeout(req.user.id, String(req.params.id)));
+        } catch (error) {
+            return this.handleError(req, res, error);
+        }
+    };
+
     surrender = async (req: Request, res: Response) => {
         try {
             if (!req.user) {

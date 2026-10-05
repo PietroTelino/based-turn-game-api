@@ -764,7 +764,7 @@ describe('passivas do catálogo', () => {
         );
     });
 
-    it('Vampiro: cada cura da Mordida ou do Banquete de Sangue aumenta o dano dele em 5%', () => {
+    it('Vampiro: as Garras, a Mordida e o Banquete de Sangue roubam vida, e cada cura dá uma carga à passiva', () => {
         const opening = createBattle({ teamA: [getCharacter('vampiro')], teamB: [getCharacter('cavaleiro'), getCharacter('guardiao')], seed: 1 }).state;
 
         // Põe a vez no Vampiro, ferido e com energia, para testar só a passiva.
@@ -773,9 +773,12 @@ describe('passivas do catálogo', () => {
         getUnit(opening, 'A1').hp = 100;
 
         const claws = applyAction(opening, { unitId: 'A1', skillId: 'vampiro.garras', targetId: 'B1' });
+        const clawHit = eventsOfType(claws.events, 'damage')[0];
 
-        assert.equal(eventsOfType(claws.events, 'heal').length, 0, 'as Garras não roubam vida');
-        assert.equal(getUnit(claws.state, 'A1').passiveStacks ?? 0, 0);
+        // O ataque básico devolve 30% do dano como vida, e essa cura também conta para a passiva.
+        assert.ok(clawHit && clawHit.amount > 0);
+        assert.deepEqual(eventsOfType(claws.events, 'heal').map((event) => [event.targetId, event.amount]), [['A1', Math.round(clawHit.amount * 0.3)]]);
+        assert.equal(getUnit(claws.state, 'A1').passiveStacks, 1);
 
         const bite = applyAction(opening, { unitId: 'A1', skillId: 'vampiro.mordida', targetId: 'B1' });
 

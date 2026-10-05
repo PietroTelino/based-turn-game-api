@@ -10,7 +10,8 @@
         "seed": "ts-node prisma/seed.ts",
         "test": "ts-node src/tests.ts",
         "battle:demo": "ts-node src/game/demo.ts",
-        "battle:balance": "ts-node --transpile-only src/game/balance.ts"
+        "battle:balance": "ts-node --transpile-only src/game/balance.ts",
+        "stats:backfill": "ts-node src/modules/stats/backfill.ts"
     },
     "keywords": [],
     "author": "",

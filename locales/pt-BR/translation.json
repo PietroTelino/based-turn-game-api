@@ -83,6 +83,9 @@
         "invalidAction": "Informe unitId e skillId (e targetId, quando a habilidade pedir um alvo)",
         "notYourUnit": "Essa unidade não é sua",
         "conflict": "A batalha mudou enquanto sua ação era processada. Atualize e tente de novo.",
+        "replayUnavailable": "O replay desta batalha não está disponível",
+        "timeoutNotAllowed": "Não é possível pedir a vitória por tempo agora",
+        "timeoutTooEarly": "O prazo do adversário ainda não acabou",
         "errorUnexpected": "Erro ao processar a batalha",
         "rules": {
             "INVALID_SETUP": "Configuração de batalha inválida",
@@ -100,5 +103,13 @@
         "full": "Essa sala já está cheia",
         "closed": "Essa sala não está mais aberta",
         "errorUnexpected": "Erro ao processar a sala"
+    },
+    "ranked": {
+        "playerNotFound": "Jogador não encontrado",
+        "alreadyInBattle": "Você tem uma partida ranqueada em andamento. Termine-a antes de procurar outra.",
+        "errorUnexpected": "Erro ao processar a ranqueada"
+    },
+    "stats": {
+        "errorUnexpected": "Erro ao carregar as estatísticas"
     }
 }

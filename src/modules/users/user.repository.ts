@@ -1,7 +1,9 @@
 import { prisma } from '../../prisma';
 import type { User } from '../../generated/prisma/client';
 
-export type SafeUser = Omit<User, 'password' | 'preferences'>;
+// Os dados de conta de um usuário, sem a senha, as preferências e os números da ranqueada
+// (pontos e placar), que têm rota própria em src/modules/ranked.
+export type SafeUser = Omit<User, 'password' | 'preferences' | 'rating' | 'rankedWins' | 'rankedLosses'>;
 
 export class UserRepository {
     async findAll(): Promise<SafeUser[]> {

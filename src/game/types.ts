@@ -398,6 +398,13 @@ export interface BattleState {
     /** Preenchido quando a batalha acabou porque um time desistiu. */
     surrenderedBy?: TeamId;
     /**
+     * A desistência foi por tempo esgotado: numa partida ranqueada, o time de
+     * `surrenderedBy` passou do prazo sem jogar e o outro pediu a vitória. O
+     * motor não usa: quem marca é o serviço de batalhas, para a tela dizer o
+     * que aconteceu.
+     */
+    timedOut?: boolean;
+    /**
      * Batalha de treino (o tutorial). O motor não usa: quem lê é quem escolhe as
      * jogadas da IA, para ela jogar fraco (`chooseTrainingAction`), e a tela,
      * para mostrar o guia. Fica no estado para acompanhar a batalha gravada.

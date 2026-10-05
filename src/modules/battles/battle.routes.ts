@@ -19,8 +19,10 @@ export function createBattlesRouter(service: BattleService): Router {
     battlesRouter.post('/', controller.create);
     battlesRouter.get('/:id', controller.getById);
     battlesRouter.get('/:id/events', controller.events);
+    battlesRouter.get('/:id/replay', controller.replay);
     battlesRouter.post('/:id/actions', controller.act);
     battlesRouter.post('/:id/surrender', controller.surrender);
+    battlesRouter.post('/:id/timeout', controller.timeout);
 
     return battlesRouter;
 }

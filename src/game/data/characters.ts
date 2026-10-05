@@ -278,7 +278,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'criomante.nevasca',
                 name: 'Nevasca',
                 description: 'Atinge todos os inimigos e os deixa mais lentos por 2 turnos.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'all-enemies',
                 element: 'ice',
                 effects: [
@@ -290,7 +290,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'criomante.prisao-de-gelo',
                 name: 'Prisão de Gelo',
                 description: 'Congela um inimigo: causa dano e o faz perder a próxima vez.',
-                energyCost: 2,
+                energyCost: 1,
                 target: 'single-enemy',
                 element: 'ice',
                 ranged: true,
@@ -426,18 +426,18 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'vampiro.garras',
                 name: 'Garras',
-                description: 'Rasga um inimigo com as garras.',
+                description: 'Rasga um inimigo e recupera 30% do dano como vida.',
                 energyCost: 0,
                 target: 'single-enemy',
                 element: 'shadow',
                 effects: [
-                    { type: 'damage', power: 1.0 },
+                    { type: 'damage', power: 1.0, drain: 0.3 },
                 ],
             },
             {
                 id: 'vampiro.mordida',
                 name: 'Mordida',
-                description: 'Morde um inimigo e recupera vida igual à metade do dano causado.',
+                description: 'Morde um inimigo e recupera metade do dano como vida.',
                 energyCost: 1,
                 target: 'single-enemy',
                 element: 'shadow',
@@ -448,12 +448,12 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'vampiro.banquete-de-sangue',
                 name: 'Banquete de Sangue',
-                description: 'Atinge todos os inimigos e recupera vida igual à metade do dano causado.',
+                description: 'Atinge todos os inimigos e recupera metade do dano como vida.',
                 energyCost: 2,
                 target: 'all-enemies',
                 element: 'shadow',
                 effects: [
-                    { type: 'damage', power: 0.75, drain: 0.5 },
+                    { type: 'damage', power: 0.85, drain: 0.5 },
                 ],
             },
         ],
@@ -461,7 +461,7 @@ export const CHARACTERS: CharacterDefinition[] = [
             {
                 id: 'vampiro.sede-de-sangue',
                 name: 'Sede de Sangue',
-                description: 'Cada cura que o Vampiro recebe do roubo de vida das habilidades aumenta o dano dele em 10% até o fim da batalha.',
+                description: 'Cada cura do roubo de vida dos golpes dele aumenta o dano dele em 10% até o fim da batalha.',
                 element: 'shadow',
                 effect: { type: 'damage_per_drain', amount: 0.1 },
             },
@@ -763,7 +763,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                         id: 'druida.rugido',
                         name: 'Rugido',
                         description: 'Provoca os inimigos e aumenta a própria defesa por 2 turnos: os golpes de alvo único deles só podem mirar no urso.',
-                        energyCost: 1,
+                        energyCost: 0,
                         target: 'self',
                         element: 'nature',
                         effects: [
@@ -775,7 +775,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                         id: 'druida.esmagar',
                         name: 'Esmagar',
                         description: 'Um golpe pesado que reduz o ataque do alvo por 2 turnos.',
-                        energyCost: 2,
+                        energyCost: 1,
                         target: 'single-enemy',
                         element: 'nature',
                         effects: [
@@ -815,7 +815,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                         id: 'druida.dilacerar',
                         name: 'Dilacerar',
                         description: 'Dois golpes de garra no mesmo inimigo. Cada um pode ser crítico.',
-                        energyCost: 1,
+                        energyCost: 0,
                         target: 'single-enemy',
                         element: 'physical',
                         effects: [
@@ -827,7 +827,7 @@ export const CHARACTERS: CharacterDefinition[] = [
                         id: 'druida.frenesi',
                         name: 'Frenesi',
                         description: 'Avança sobre todos os inimigos, que saem sangrando.',
-                        energyCost: 2,
+                        energyCost: 1,
                         target: 'all-enemies',
                         element: 'physical',
                         effects: [

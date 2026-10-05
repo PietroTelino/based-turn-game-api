@@ -1,24 +1,44 @@
 import { randomUUID } from 'node:crypto';
 import type { BattleEvent, BattleState } from '../../../game';
-import type { BattleRecord, BattleSnapshot, BattleStore, BattleSummaryRow } from '../battle.types';
+import type { BattlePick, BattleRecord, BattleSnapshot, BattleStore, BattleSummaryRow, NewBattle } from '../battle.types';
 
-/** Faz o mesmo papel do banco nos testes: guarda as batalhas num Map. */
+/** Um personagem escolhido, como fica na tabela de escolhas. */
+export interface StoredPick extends BattlePick {
+    battleId: string;
+}
+
+/**
+ * Faz o mesmo papel do banco nos testes: guarda as batalhas num Map. `now` é o
+ * relógio (os testes de prazo trocam). `picks` e `initialStates` ficam à vista
+ * porque outros "bancos" em memória (estatísticas, ranqueada) leem daqui, como
+ * no banco de verdade as tabelas se enxergam.
+ */
 export class InMemoryBattleStore implements BattleStore {
     private rows = new Map<string, BattleRecord>();
+    picks: StoredPick[] = [];
+    initialStates = new Map<string, BattleState>();
 
-    async create(userId: string, snapshot: BattleSnapshot, versus?: { opponentId: string; events: BattleEvent[] }): Promise<BattleRecord> {
-        const now = new Date();
+    constructor(private now: () => Date = () => new Date()) {}
+
+    async create(userId: string, snapshot: BattleSnapshot, extra: NewBattle): Promise<BattleRecord> {
+        const now = this.now();
         const record: BattleRecord = {
             ...copy(snapshot),
             id: randomUUID(),
             userId,
-            opponentId: versus?.opponentId ?? null,
-            events: asJson(versus?.events ?? []),
+            opponentId: extra.opponentId ?? null,
+            events: asJson(extra.events),
+            hasReplay: true,
+            ranked: extra.ranked === true,
+            ratingDeltaA: null,
+            ratingDeltaB: null,
             createdAt: now,
             updatedAt: now,
         };
 
         this.rows.set(record.id, record);
+        this.initialStates.set(record.id, asJson(extra.initialState));
+        this.picks.push(...extra.picks.map((pick) => ({ ...pick, battleId: record.id })));
 
         return copy(record);
     }
@@ -29,6 +49,12 @@ export class InMemoryBattleStore implements BattleStore {
         return record ? copy(record) : null;
     }
 
+    async findInitialState(id: string): Promise<BattleState | null> {
+        const state = this.initialStates.get(id);
+
+        return state ? asJson(state) : null;
+    }
+
     async findManyByUser(userId: string, limit: number): Promise<BattleSummaryRow[]> {
         return [...this.rows.values()]
             .filter((record) => record.userId === userId || record.opponentId === userId)
@@ -37,7 +63,7 @@ export class InMemoryBattleStore implements BattleStore {
             .map(({ state: _state, events: _events, ...summary }) => summary);
     }
 
-    async saveIfStep(id: string, expectedStep: number, snapshot: BattleSnapshot, events?: BattleEvent[]): Promise<BattleRecord | null> {
+    async saveIfStep(id: string, expectedStep: number, snapshot: BattleSnapshot, events: BattleEvent[]): Promise<BattleRecord | null> {
         const current = this.rows.get(id);
 
         if (!current || current.step !== expectedStep || current.status !== 'in_progress') {
@@ -47,13 +73,20 @@ export class InMemoryBattleStore implements BattleStore {
         const updated: BattleRecord = {
             ...current,
             ...copy(snapshot),
-            ...(events && { events: asJson(events) }),
-            updatedAt: new Date(),
+            events: asJson(events),
+            updatedAt: this.now(),
         };
 
         this.rows.set(id, updated);
 
         return copy(updated);
+    }
+
+    /** Só para os testes e para a ranqueada em memória: mexe direto numa batalha guardada. */
+    patch(id: string, change: Partial<BattleRecord>): void {
+        const current = this.rows.get(id);
+
+        if (current) this.rows.set(id, { ...current, ...change });
     }
 }
 

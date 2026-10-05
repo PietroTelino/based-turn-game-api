@@ -21,6 +21,11 @@ model User {
 
     preferences     Json?           @map("preferences")
 
+    // Partidas ranqueadas: os pontos (é deles que sai o rank) e o placar.
+    rating          Int             @default(0)
+    rankedWins      Int             @default(0) @map("ranked_wins")
+    rankedLosses    Int             @default(0) @map("ranked_losses")
+
     passwordResets  PasswordReset[] 
     refreshTokens   RefreshToken[]
     auditLogs       AuditLog[]      @relation("UserAudits")
@@ -29,6 +34,8 @@ model User {
     opponentBattles Battle[]        @relation("BattleOpponent")
     hostedRooms     Room[]          @relation("RoomHost")
     joinedRooms     Room[]          @relation("RoomGuest")
+    battlePicks     BattlePick[]
+    rankedTicket    RankedTicket?
 
     @@map("users")
 }
@@ -104,9 +111,22 @@ model Battle {
     step        Int       @default(0)
     // O BattleState inteiro do motor (src/game), em JSON.
     state       Json
-    // Tudo o que aconteceu na batalha, em ordem (lista de BattleEvent). Só as batalhas entre
-    // dois jogadores guardam: é por aqui que cada um acompanha as jogadas do outro.
+    // Tudo o que aconteceu na batalha, em ordem (lista de BattleEvent). Entre dois jogadores,
+    // é por aqui que cada um acompanha as jogadas do outro; depois que a batalha acaba, é o replay.
+    // Vazio nas batalhas contra a IA criadas antes de o replay existir.
     events      Json?
+    // O BattleState como saiu de createBattle, antes de qualquer jogada: é de onde o replay começa.
+    initialState Json?    @map("initial_state")
+    // Tem `initialState` e os eventos desde o começo (as batalhas antigas não têm).
+    hasReplay   Boolean   @default(false) @map("has_replay")
+
+    // Partida ranqueada (veio da fila de pareamento) e os pontos que cada lado ganhou ou
+    // perdeu quando ela acabou. Os dois ficam vazios até o resultado ser lançado.
+    ranked        Boolean @default(false)
+    ratingDeltaA  Int?    @map("rating_delta_a")
+    ratingDeltaB  Int?    @map("rating_delta_b")
+
+    picks       BattlePick[]
 
     createdAt   DateTime  @default(now()) @map("created_at")
     updatedAt   DateTime  @updatedAt      @map("updated_at")
@@ -115,6 +135,46 @@ model Battle {
     @@map("battles")
     @@index([userId, createdAt])
     @@index([opponentId, createdAt])
+}
+
+// Um personagem que um jogador levou para uma batalha. É daqui que saem as estatísticas de
+// "personagens mais usados". O time da IA e as batalhas de treino (tutorial) não entram.
+model BattlePick {
+    id          String   @id @default(uuid()) @db.Uuid
+    battleId    String   @map("battle_id") @db.Uuid
+    battle      Battle   @relation(fields: [battleId], references: [id], onDelete: Cascade)
+    userId      String   @map("user_id") @db.Uuid
+    user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    characterId String   @map("character_id")
+    createdAt   DateTime @default(now()) @map("created_at")
+
+    @@map("battle_picks")
+    @@index([userId, characterId])
+    @@index([characterId])
+    @@index([battleId])
+}
+
+// Fila das partidas ranqueadas: um bilhete por jogador. Ele entra com o time escolhido e
+// espera o pareamento automático; quando acha um adversário, o bilhete aponta para a batalha.
+model RankedTicket {
+    id          String   @id @default(uuid()) @db.Uuid
+    userId      String   @unique @map("user_id") @db.Uuid
+    user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    // O time com que o jogador entrou na fila (lista de ids de personagens).
+    team        Json
+    // Os pontos do jogador quando entrou: a fila procura alguém com pontos parecidos.
+    rating      Int
+    // "searching" | "matching" | "matched" | "cancelled" (ver src/modules/ranked/ranked.types.ts)
+    status      String   @default("searching")
+    battleId    String?  @map("battle_id") @db.Uuid
+    // Quando entrou na fila (o bilhete é reaproveitado, então não é a data de criação da linha).
+    queuedAt    DateTime @default(now()) @map("queued_at")
+    // A última vez que a tela do jogador perguntou pela fila. Quem para de perguntar saiu.
+    lastSeenAt  DateTime @default(now()) @map("last_seen_at")
+    updatedAt   DateTime @updatedAt      @map("updated_at")
+
+    @@map("ranked_tickets")
+    @@index([status, queuedAt])
 }
 
 // Sala do multiplayer: onde dois jogadores se encontram e escolhem os times antes da batalha.

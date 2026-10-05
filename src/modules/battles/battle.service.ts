@@ -13,12 +13,15 @@ import {
 import type { BattleAction, BattleEvent, BattleResult, BattleState, CharacterDefinition, TeamId } from '../../game';
 import { BattleError } from './battle.errors';
 import type {
+    BattlePick,
     BattleRecord,
     BattleResponse,
     BattleSnapshot,
     BattleStore,
     BattleSummary,
     BattleView,
+    PublicBattleState,
+    ReplayResponse,
 } from './battle.types';
 
 /**
@@ -31,6 +34,13 @@ export const AI_TEAM: TeamId = 'B';
 /** Toda batalha é 5 contra 5: os dois times entram com exatamente este número de personagens. */
 export const TEAM_SIZE = 5;
 
+/**
+ * Partida ranqueada: quanto tempo quem está na vez tem para jogar. Passado o
+ * prazo, o outro lado pode pedir a vitória (`claimTimeout`). Sem isto, quem
+ * está perdendo só fecharia a tela e a partida nunca valeria pontos.
+ */
+export const RANKED_TURN_LIMIT_MS = 90_000;
+
 const LIST_LIMIT = 20;
 const MAX_AI_ACTIONS_IN_A_ROW = 100;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -41,9 +51,14 @@ export interface CreateVersusInput {
     hostTeam: string[];
     guestId: string;
     guestTeam: string[];
+    /** Partida ranqueada: veio da fila de pareamento, vale pontos e tem prazo para jogar. */
+    ranked?: boolean;
     /** Semente do motor. Só os testes usam. */
     seed?: number;
 }
+
+/** Quem quer saber quando uma batalha acaba (a ranqueada, para lançar os pontos). */
+export type BattleFinishedListener = (record: BattleRecord) => Promise<void>;
 
 export interface CreateBattleInput {
     /** Ids dos personagens do jogador: exatamente TEAM_SIZE, sem repetir. */
@@ -67,9 +82,14 @@ export interface CreateBattleInput {
  * - Entre dois jogadores: cada um só mexe nas próprias unidades, na vez
  *   delas. O que acontece vai para o histórico da batalha (`events`), e é
  *   por ele que o outro lado acompanha as jogadas (`events()`, mais abaixo).
+ *
+ * Toda batalha guarda o estado inicial e o histórico inteiro: com ela
+ * encerrada, é o que o replay mostra (`replay()`).
  */
 export class BattleService {
     private teamSize: number;
+    private now: () => Date;
+    private finishedListeners: BattleFinishedListener[] = [];
 
     constructor(
         private store: BattleStore,
@@ -77,11 +97,22 @@ export class BattleService {
         /**
          * `teamSize` troca o tamanho obrigatório dos times. O jogo nunca passa
          * isto (vale TEAM_SIZE); existe para os testes poderem usar batalhas
-         * de 1 contra 1, que são muito mais fáceis de acompanhar.
+         * de 1 contra 1, que são muito mais fáceis de acompanhar. `now` é o
+         * relógio, que os testes de prazo também trocam.
          */
-        options: { teamSize?: number } = {},
+        options: { teamSize?: number; now?: () => Date } = {},
     ) {
         this.teamSize = options.teamSize ?? TEAM_SIZE;
+        this.now = options.now ?? (() => new Date());
+    }
+
+    /**
+     * Registra quem deve ser avisado quando uma batalha acaba. O aviso
+     * acontece depois da gravação e antes da resposta, então a resposta de
+     * quem deu o último golpe já traz o que o ouvinte mudou (os pontos).
+     */
+    onFinished(listener: BattleFinishedListener): void {
+        this.finishedListeners.push(listener);
     }
 
     listCharacters(): CharacterDefinition[] {
@@ -91,11 +122,16 @@ export class BattleService {
     async list(userId: string): Promise<BattleSummary[]> {
         const rows = await this.store.findManyByUser(userId, LIST_LIMIT);
 
-        return rows.map(({ userId: ownerId, opponentId, ...row }) => ({
-            ...row,
-            mode: opponentId === null ? 'ai' : 'pvp',
-            playerTeam: teamOf({ userId: ownerId, opponentId }, userId) ?? PLAYER_TEAM,
-        }));
+        return rows.map(({ userId: ownerId, opponentId, ratingDeltaA, ratingDeltaB, ...row }) => {
+            const playerTeam = teamOf({ userId: ownerId, opponentId }, userId) ?? PLAYER_TEAM;
+
+            return {
+                ...row,
+                mode: opponentId === null ? 'ai' : 'pvp',
+                playerTeam,
+                ratingChange: playerTeam === 'A' ? ratingDeltaA : ratingDeltaB,
+            };
+        });
     }
 
     async create(userId: string, input: CreateBattleInput): Promise<BattleResponse> {
@@ -116,9 +152,14 @@ export class BattleService {
 
         // Se as unidades da IA forem as primeiras da ordem, ela já abre a batalha.
         const { state, events } = this.playAiActions(started);
-        const record = await this.store.create(userId, toSnapshot(state));
+        const record = await this.store.create(userId, this.toSnapshot(state), {
+            events,
+            initialState: started.state,
+            // O treino tem sempre o mesmo time: não é escolha do jogador e não entra nas estatísticas.
+            picks: input.training ? [] : picksOf(userId, teamA),
+        });
 
-        return { battle: toView(record, PLAYER_TEAM), events };
+        return { battle: this.toView(record, PLAYER_TEAM), events };
     }
 
     /**
@@ -127,17 +168,29 @@ export class BattleService {
      * aqui: a batalha nasce parada na vez da primeira unidade.
      */
     async createVersus(input: CreateVersusInput): Promise<string> {
+        const teamA = this.resolveTeam(input.hostTeam);
+        const teamB = this.resolveTeam(input.guestTeam);
         const started = createBattle({
-            teamA: this.resolveTeam(input.hostTeam),
-            teamB: this.resolveTeam(input.guestTeam),
+            teamA,
+            teamB,
             ...(input.seed !== undefined && { seed: input.seed }),
         });
-        const record = await this.store.create(input.hostId, toSnapshot(started.state), {
+        const record = await this.store.create(input.hostId, this.toSnapshot(started.state), {
             opponentId: input.guestId,
             events: started.events,
+            initialState: started.state,
+            ...(input.ranked && { ranked: true }),
+            picks: [...picksOf(input.hostId, teamA), ...picksOf(input.guestId, teamB)],
         });
 
         return record.id;
+    }
+
+    /** `true` enquanto a batalha existe e ainda não acabou. A fila ranqueada usa para saber se o jogador está ocupado. */
+    async isInProgress(battleId: string): Promise<boolean> {
+        const record = UUID_PATTERN.test(battleId) ? await this.store.findById(battleId) : null;
+
+        return record?.status === 'in_progress';
     }
 
     /** Confere um time sem criar nada: lança INVALID_TEAM ou UNKNOWN_CHARACTER. */
@@ -148,7 +201,23 @@ export class BattleService {
     async get(userId: string, battleId: string): Promise<BattleView> {
         const { record, team } = await this.findForPlayer(userId, battleId);
 
-        return toView(record, team);
+        return this.toView(record, team);
+    }
+
+    /**
+     * A batalha encerrada, do começo ao fim: o estado de quando ela foi
+     * criada e tudo o que aconteceu depois. Só quem jogou a batalha pode ver,
+     * e só as que guardaram o começo (as criadas antes do replay não têm).
+     */
+    async replay(userId: string, battleId: string): Promise<ReplayResponse> {
+        const { record, team } = await this.findForPlayer(userId, battleId);
+        const initial = record.status === 'finished' && record.hasReplay ? await this.store.findInitialState(record.id) : null;
+
+        if (!initial) {
+            throw new BattleError('REPLAY_UNAVAILABLE', 409, 'battle.replayUnavailable');
+        }
+
+        return { battle: this.toView(record, team), initial: toPublicState(upgradeState(initial)), events: record.events };
     }
 
     /**
@@ -159,7 +228,7 @@ export class BattleService {
     async events(userId: string, battleId: string, after: number): Promise<BattleResponse> {
         const { record, team } = await this.findForPlayer(userId, battleId);
 
-        return { battle: toView(record, team), events: record.events.slice(Math.max(0, after)) };
+        return { battle: this.toView(record, team), events: record.events.slice(Math.max(0, after)) };
     }
 
     async act(userId: string, battleId: string, action: BattleAction): Promise<BattleResponse> {
@@ -184,21 +253,96 @@ export class BattleService {
         return this.save(record, team, surrender(record.state, team));
     }
 
+    /**
+     * Partida ranqueada: o adversário passou do prazo sem jogar, e quem está
+     * esperando pede a vitória. Vale como desistência do time que travou, com
+     * a marca de tempo esgotado no estado. Só quem NÃO está na vez pode pedir,
+     * e só depois que o prazo acabou.
+     */
+    async claimTimeout(userId: string, battleId: string): Promise<BattleResponse> {
+        const { record, team } = await this.findForPlayer(userId, battleId);
+        const active = getActiveUnit(record.state);
+
+        if (!record.ranked || record.status !== 'in_progress' || !active || active.team === team) {
+            throw new BattleError('TIMEOUT_NOT_ALLOWED', 409, 'battle.timeoutNotAllowed');
+        }
+
+        if (this.turnTimeLeft(record) > 0) {
+            throw new BattleError('TIMEOUT_TOO_EARLY', 409, 'battle.timeoutTooEarly');
+        }
+
+        const result = surrender(record.state, active.team);
+
+        result.state.timedOut = true;
+
+        return this.save(record, team, result);
+    }
+
     /** Grava o resultado de uma jogada (ou desistência) e monta a resposta para quem jogou. */
     private async save(record: BattleRecord, team: TeamId, result: BattleResult): Promise<BattleResponse> {
-        const saved = await this.store.saveIfStep(
-            record.id,
-            record.step,
-            toSnapshot(result.state),
-            // Entre dois jogadores, os eventos entram no histórico para o outro lado buscar.
-            isVersus(record) ? [...record.events, ...result.events] : undefined,
-        );
+        // Os eventos entram no histórico: é por ele que o outro jogador acompanha
+        // a partida, e é ele que o replay mostra depois.
+        let saved = await this.store.saveIfStep(record.id, record.step, this.toSnapshot(result.state), [...record.events, ...result.events]);
 
         if (!saved) {
             throw new BattleError('BATTLE_CONFLICT', 409, 'battle.conflict');
         }
 
-        return { battle: toView(saved, team), events: result.events };
+        // Só uma requisição consegue gravar o fim da batalha (a trava é o
+        // saveIfStep), então os ouvintes são avisados uma vez só.
+        if (saved.status === 'finished' && this.finishedListeners.length > 0) {
+            for (const listener of this.finishedListeners) {
+                await listener(saved);
+            }
+
+            // O ouvinte pode ter mudado a batalha (os pontos da ranqueada).
+            saved = (await this.store.findById(saved.id)) ?? saved;
+        }
+
+        return { battle: this.toView(saved, team), events: result.events };
+    }
+
+    /** Quanto falta do prazo de quem está na vez, em ms (0 quando acabou). O relógio zera a cada jogada gravada. */
+    private turnTimeLeft(record: BattleRecord): number {
+        return Math.max(0, RANKED_TURN_LIMIT_MS - (this.now().getTime() - record.updatedAt.getTime()));
+    }
+
+    private toSnapshot(state: BattleState): BattleSnapshot {
+        const finished = state.winner !== null;
+
+        return {
+            status: finished ? 'finished' : 'in_progress',
+            winner: state.winner,
+            turn: state.turn,
+            step: state.step,
+            state,
+            finishedAt: finished ? this.now() : null,
+        };
+    }
+
+    /** A batalha como `team` a enxerga. */
+    private toView(record: BattleRecord, team: TeamId): BattleView {
+        const active = getActiveUnit(record.state);
+        const hasDeadline = record.ranked && record.status === 'in_progress';
+
+        return {
+            id: record.id,
+            mode: isVersus(record) ? 'pvp' : 'ai',
+            status: record.status,
+            winner: record.winner,
+            playerTeam: team,
+            state: toPublicState(record.state),
+            // Na vez do outro jogador não há o que escolher.
+            availableActions: active && active.team !== team ? [] : getAvailableActions(record.state),
+            cursor: record.events.length,
+            hasReplay: record.hasReplay,
+            ranked: record.ranked,
+            ratingChange: team === 'A' ? record.ratingDeltaA : record.ratingDeltaB,
+            turnTimeLeftMs: hasDeadline ? this.turnTimeLeft(record) : null,
+            createdAt: record.createdAt,
+            updatedAt: record.updatedAt,
+            finishedAt: record.finishedAt,
+        };
     }
 
     /** Busca a batalha, garante que quem pediu joga nela e diz de que lado. */
@@ -270,17 +414,20 @@ export class BattleService {
     }
 }
 
-function toSnapshot(state: BattleState): BattleSnapshot {
-    const finished = state.winner !== null;
+/** Os personagens de um time, como escolhas do jogador (para as estatísticas de uso). */
+function picksOf(userId: string, team: CharacterDefinition[]): BattlePick[] {
+    return team.map((character) => ({ userId, characterId: character.id }));
+}
 
-    return {
-        status: finished ? 'finished' : 'in_progress',
-        winner: state.winner,
-        turn: state.turn,
-        step: state.step,
-        state,
-        finishedAt: finished ? new Date() : null,
-    };
+/**
+ * O estado sem o que fica só no servidor: com o gerador de números aleatórios
+ * e o que ele sorteou no turno, o jogador poderia prever os críticos. A fúria
+ * é calculada a partir do turno e vai junto para a tela mostrar.
+ */
+function toPublicState(full: BattleState): PublicBattleState {
+    const { rngState: _rngState, draws: _draws, ...state } = full;
+
+    return { ...state, fury: getFuryBonus(state.turn) };
 }
 
 /** De que lado `userId` joga: A para quem criou a batalha, B para o oponente, null se ele não está nela. */
@@ -295,26 +442,3 @@ function isVersus(record: BattleRecord): boolean {
     return record.opponentId !== null;
 }
 
-/** A batalha como `team` a enxerga. */
-function toView(record: BattleRecord, team: TeamId): BattleView {
-    // O gerador de números aleatórios e o que ele sorteou no turno ficam só no
-    // servidor: com eles o jogador poderia prever os críticos.
-    const { rngState: _rngState, draws: _draws, ...state } = record.state;
-    const active = getActiveUnit(record.state);
-
-    return {
-        id: record.id,
-        mode: isVersus(record) ? 'pvp' : 'ai',
-        status: record.status,
-        winner: record.winner,
-        playerTeam: team,
-        // A fúria é calculada a partir do turno; vai junto para a tela mostrar.
-        state: { ...state, fury: getFuryBonus(state.turn) },
-        // Na vez do outro jogador não há o que escolher.
-        availableActions: active && active.team !== team ? [] : getAvailableActions(record.state),
-        cursor: record.events.length,
-        createdAt: record.createdAt,
-        updatedAt: record.updatedAt,
-        finishedAt: record.finishedAt,
-    };
-}

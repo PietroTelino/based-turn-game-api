@@ -24,7 +24,8 @@ import type { AvailableAction, BattleAction, BattleState, BattleUnit } from './t
  *    quem tem uma postura sem custo (um bônus em si mesma, como a Postura
  *    de Duelo) entra nela sempre que não está;
  * 4. senão, usa a habilidade mais cara que a energia do time permite (no
- *    empate, a provocação primeiro), pulando as de suporte (escudo, bônus)
+ *    empate, a provocação primeiro e depois o golpe de mais dano no
+ *    total), pulando as de suporte (escudo, bônus)
  *    que não acrescentariam nada porque os alvos já estão com o efeito;
  * 5. ataques miram em quem tem menos vida; suporte vai para o aliado mais
  *    ferido que ainda não tem o efeito. Se um inimigo está provocando, o
@@ -82,10 +83,15 @@ function decide(state: BattleState, useStance: boolean): BattleAction {
     }
 
     // No empate de custo, a provocação vem antes: sem isso o tanque gastaria a
-    // energia sempre no escudo e nunca chamaria os golpes para si.
+    // energia sempre no escudo e nunca chamaria os golpes para si. Depois, o
+    // golpe que causa mais dano no total: sem isso, entre duas habilidades
+    // sem custo (a Mordida e o Dilacerar do lobo) ela ficaria sempre na primeira.
     const byCost = options
         .filter((option) => !isHeal(option))
-        .sort((a, b) => b.skill.energyCost - a.skill.energyCost || Number(isTaunt(b)) - Number(isTaunt(a)));
+        .sort(
+            (a, b) =>
+                b.skill.energyCost - a.skill.energyCost || Number(isTaunt(b)) - Number(isTaunt(a)) || totalPower(b) - totalPower(a),
+        );
 
     for (const option of byCost) {
         if (!isSupport(option)) {
@@ -216,6 +222,13 @@ function chooseForm(actor: BattleUnit, options: AvailableAction[]): BattleAction
     }
 
     return best ? toAction(actor.id, best.option, actor.id) : null;
+}
+
+/** A força dos golpes da habilidade somada, vezes quantos alvos ela atinge. */
+function totalPower(option: AvailableAction): number {
+    const power = option.skill.effects.reduce((total, effect) => total + (effect.type === 'damage' ? effect.power : 0), 0);
+
+    return power * (option.requiresTarget ? 1 : option.targetIds.length);
 }
 
 function isTaunt(option: AvailableAction): boolean {

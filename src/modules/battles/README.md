@@ -9,23 +9,27 @@ Existem dois tipos de batalha, e as rotas são as mesmas para os dois:
   Nasce em `POST /api/battles`.
 - **Entre dois jogadores** (`mode: "pvp"`): quem criou a sala é o time **A** e
   quem entrou é o time **B**. Nasce no módulo de salas (`src/modules/rooms`),
-  quando os dois avisam que estão prontos. Não há rota para criar uma direto.
+  quando os dois avisam que estão prontos, ou na fila ranqueada
+  (`src/modules/ranked`), quando dois jogadores são pareados; aí vem com
+  `ranked: true`, vale pontos e tem prazo para jogar. Não há rota para criar
+  uma direto.
 
 Em toda resposta, `playerTeam` diz de que lado está quem fez a requisição.
 
 ## Antes de usar
 
-Os models `Battle` e `Room` ficam em `prisma/schema.prisma`. Depois de qualquer
-mudança neles, crie a migração e atualize o client gerado:
+Os models `Battle`, `BattlePick`, `Room` e `RankedTicket` ficam em
+`prisma/schema.prisma`. Depois de qualquer mudança neles, crie a migração e
+atualize o client gerado:
 
 ```bash
-npx prisma migrate dev --name multiplayer
+npx prisma migrate dev --name ranqueada
 npx prisma generate
 ```
 
-Até isso ser feito, `npm run build` acusa erro em `battle.repository.ts` e em
-`room.repository.ts` (o client gerado ainda não conhece os campos novos) e as
-rotas de batalha e de sala respondem 500. O resto da API não é afetado.
+Até isso ser feito, `npm run build` acusa erro nos repositórios (o client
+gerado ainda não conhece os campos novos) e as rotas de batalha, de sala, da
+ranqueada e das estatísticas respondem 500. O resto da API não é afetado.
 
 ## Rotas
 
@@ -35,9 +39,11 @@ rotas de batalha e de sala respondem 500. O resto da API não é afetado.
 | POST | `/api/battles` | Cria uma batalha contra a IA. |
 | GET | `/api/battles` | Lista as últimas 20 batalhas do jogador, de qualquer um dos lados (sem o estado). |
 | GET | `/api/battles/:id` | Estado atual de uma batalha. |
-| GET | `/api/battles/:id/events?after=N` | O que aconteceu depois do evento `N`. Só tem conteúdo em batalha entre jogadores. |
+| GET | `/api/battles/:id/events?after=N` | O que aconteceu depois do evento `N`. É como cada jogador acompanha as jogadas do outro. |
+| GET | `/api/battles/:id/replay` | A batalha encerrada, do começo ao fim, para assistir de novo. |
 | POST | `/api/battles/:id/actions` | Envia a jogada da unidade da vez. |
 | POST | `/api/battles/:id/surrender` | Desiste: a batalha termina como derrota de quem desistiu. |
+| POST | `/api/battles/:id/timeout` | Partida ranqueada: o adversário passou do prazo e quem espera pede a vitória. |
 
 ### Criar
 
@@ -110,7 +116,11 @@ vence e `state.surrenderedBy` guarda o time de quem desistiu; os eventos são
             "winner": null
         },
         "availableActions": [],
-        "cursor": 0
+        "cursor": 14,
+        "hasReplay": true,
+        "ranked": false,
+        "ratingChange": null,
+        "turnTimeLeftMs": null
     },
     "events": []
 }
@@ -151,8 +161,57 @@ GET /api/battles/:id/events?after=12
 encurtar) e `events` são os eventos de número `after` em diante, no mesmo
 formato das outras respostas. Se nada
 aconteceu, `events` vem vazio e `cursor` é igual a `after`. `after=0` devolve a
-batalha inteira, e é assim que a tela anima a abertura ao entrar. Em batalha
-contra a IA a lista não é guardada: `cursor` é sempre 0 e `events` vem vazio.
+batalha inteira, e é assim que a tela anima a abertura ao entrar. A batalha
+contra a IA também guarda a lista (é o que o replay mostra), mas a tela não
+precisa perguntar por ela: os eventos vêm na resposta de cada jogada.
+
+### Replay
+
+Toda batalha guarda o estado de quando foi criada (`initial_state`) e todos os
+eventos. Com ela encerrada, quem jogou pode assistir de novo:
+
+```
+GET /api/battles/:id/replay
+```
+
+```json
+{ "battle": { "status": "finished" }, "initial": { "turn": 1, "units": [] }, "events": [] }
+```
+
+`battle` é a batalha como terminou (a mesma visão das outras rotas), `initial`
+é o estado do começo, sem o gerador de números aleatórios, e `events` é tudo o
+que aconteceu, em ordem. A tela parte de `initial` e aplica os eventos, do
+mesmo jeito que anima uma batalha de verdade.
+
+Responde 409 (`REPLAY_UNAVAILABLE`) enquanto a batalha está em andamento e
+para as batalhas criadas antes de o replay existir, que não guardaram o
+começo. A listagem (`GET /api/battles`) e cada batalha trazem `hasReplay`.
+
+### Partida ranqueada: pontos e prazo
+
+Uma batalha com `ranked: true` nasce na fila ranqueada e muda duas coisas:
+
+- **Pontos.** Quando ela acaba, o serviço avisa a ranqueada
+  (`BattleService.onFinished`), que lança os pontos dos dois jogadores. A
+  batalha passa a trazer `ratingChange`: quantos pontos quem pediu ganhou ou
+  perdeu (negativo). Desistência e tempo esgotado contam como derrota.
+- **Prazo.** Quem está na vez tem 90 segundos para jogar
+  (`RANKED_TURN_LIMIT_MS`); o relógio zera a cada jogada gravada.
+  `turnTimeLeftMs` diz quanto falta. Passado o prazo, quem está esperando
+  chama `POST /api/battles/:id/timeout` e vence: a batalha termina como uma
+  desistência do time que travou, com `state.timedOut: true`. Antes do prazo a
+  rota responde 409 (`TIMEOUT_TOO_EARLY`); em batalha que não é ranqueada, já
+  acabou, ou na própria vez de quem pediu, 409 (`TIMEOUT_NOT_ALLOWED`).
+
+Não há tarefa rodando sozinha no servidor: quem pede a vitória é a tela do
+jogador que está esperando, quando o relógio dela chega a zero.
+
+### Personagens escolhidos
+
+Ao criar uma batalha, o serviço grava em `battle_picks` os personagens que
+cada jogador levou. É o que alimenta as estatísticas de personagens mais
+usados (`src/modules/stats`). O time sorteado para a IA e a batalha de treino
+não são gravados.
 
 ### Erros
 
@@ -165,7 +224,7 @@ contra a IA a lista não é guardada: `cursor` é sempre 0 e `events` vem vazio.
 | 400 | `INVALID_TEAM`, `UNKNOWN_CHARACTER`, `INVALID_ACTION` e as regras do jogo: `NOT_YOUR_TURN`, `SKILL_NOT_FOUND`, `NOT_ENOUGH_ENERGY`, `TARGET_REQUIRED`, `INVALID_TARGET`, `UNIT_NOT_FOUND` |
 | 403 | `NOT_YOUR_UNIT` |
 | 404 | `BATTLE_NOT_FOUND` (inclui batalha de outro jogador) |
-| 409 | `BATTLE_OVER`, `BATTLE_CONFLICT` (duas jogadas simultâneas na mesma vez) |
+| 409 | `BATTLE_OVER`, `BATTLE_CONFLICT` (duas jogadas simultâneas na mesma vez), `REPLAY_UNAVAILABLE`, `TIMEOUT_TOO_EARLY`, `TIMEOUT_NOT_ALLOWED` |
 
 As mensagens ficam em `locales/<idioma>/translation.json`, na seção `battle`.
 

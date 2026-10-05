@@ -83,6 +83,9 @@
         "invalidAction": "Provide unitId and skillId (and targetId when the skill needs a target)",
         "notYourUnit": "That unit is not yours",
         "conflict": "The battle changed while your action was being processed. Refresh and try again.",
+        "replayUnavailable": "The replay of this battle is not available",
+        "timeoutNotAllowed": "You cannot claim a win on time right now",
+        "timeoutTooEarly": "Your opponent's time has not run out yet",
         "errorUnexpected": "Error while processing the battle",
         "rules": {
             "INVALID_SETUP": "Invalid battle setup",
@@ -100,5 +103,13 @@
         "full": "This room is already full",
         "closed": "This room is no longer open",
         "errorUnexpected": "Error while processing the room"
+    },
+    "ranked": {
+        "playerNotFound": "Player not found",
+        "alreadyInBattle": "You have a ranked match in progress. Finish it before looking for another one.",
+        "errorUnexpected": "Error processing ranked play"
+    },
+    "stats": {
+        "errorUnexpected": "Error loading the statistics"
     }
 }

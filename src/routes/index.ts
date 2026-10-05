@@ -10,6 +10,12 @@ import { BattleService } from '../modules/battles/battle.service';
 import { createRoomsRouter } from '../modules/rooms/room.routes';
 import { RoomRepository } from '../modules/rooms/room.repository';
 import { RoomService } from '../modules/rooms/room.service';
+import { createRankedRouter } from '../modules/ranked/ranked.routes';
+import { RankedRepository } from '../modules/ranked/ranked.repository';
+import { RankedService } from '../modules/ranked/ranked.service';
+import { createStatsRouter } from '../modules/stats/stats.routes';
+import { StatsRepository } from '../modules/stats/stats.repository';
+import { StatsService } from '../modules/stats/stats.service';
 
 export const router = Router();
 
@@ -18,8 +24,14 @@ router.use('/users', usersRouter);
 router.use('/password-reset', passwordResetRouter);
 router.use('/sessions', sessionsRouter);
 router.use('/audit', auditRouter);
-// As salas do multiplayer criam batalhas, por isso os dois módulos usam o mesmo serviço.
+// As salas do multiplayer e a fila ranqueada criam batalhas, por isso os três módulos usam o mesmo serviço.
 const battleService = new BattleService(new BattleRepository());
+const rankedService = new RankedService(new RankedRepository(), battleService);
+
+// Quando uma batalha acaba, a ranqueada lança os pontos (só faz algo se a partida for ranqueada).
+battleService.onFinished((battle) => rankedService.settle(battle));
 
 router.use('/battles', createBattlesRouter(battleService));
 router.use('/rooms', createRoomsRouter(new RoomService(new RoomRepository(), battleService)));
+router.use('/ranked', createRankedRouter(rankedService));
+router.use('/stats', createStatsRouter(new StatsService(new StatsRepository())));

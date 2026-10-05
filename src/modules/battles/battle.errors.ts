@@ -4,7 +4,10 @@ export type BattleErrorCode =
     | 'UNKNOWN_CHARACTER'
     | 'INVALID_ACTION'
     | 'NOT_YOUR_UNIT'
-    | 'BATTLE_CONFLICT';
+    | 'BATTLE_CONFLICT'
+    | 'REPLAY_UNAVAILABLE'
+    | 'TIMEOUT_NOT_ALLOWED'
+    | 'TIMEOUT_TOO_EARLY';
 
 /**
  * Erros do módulo de batalhas que não são regra do jogo (esses são GameRuleError).

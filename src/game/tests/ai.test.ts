@@ -176,6 +176,25 @@ describe('catálogo de personagens', () => {
         assert.equal(getCharacter('cavaleiro').skills.find((skill) => skill.id === 'cavaleiro.brado-de-guerra')?.energyCost, 1);
     });
 
+    it('os ajustes de custo: as habilidades da Criomante e as das formas do Druida custam 1 a menos', () => {
+        const costs = (skills: { id: string; energyCost: number }[]) => skills.map((skill) => [skill.id, skill.energyCost]);
+        const forms = getCharacter('druida').forms ?? [];
+
+        assert.deepEqual(costs(getCharacter('criomante').skills), [['criomante.estilhaco', 0], ['criomante.nevasca', 1], ['criomante.prisao-de-gelo', 1]]);
+        assert.deepEqual(costs(forms.find((form) => form.id === 'urso')?.skills ?? []), [['druida.patada', 0], ['druida.rugido', 0], ['druida.esmagar', 1]]);
+        assert.deepEqual(costs(forms.find((form) => form.id === 'lobo')?.skills ?? []), [['druida.mordida', 0], ['druida.dilacerar', 0], ['druida.frenesi', 1]]);
+        // Virar urso ou lobo continua custando 1.
+        assert.deepEqual(getCharacter('druida').skills.map((skill) => skill.energyCost), [0, 1, 1]);
+    });
+
+    it('Vampiro: o Banquete de Sangue bate com 85% do ataque e as Garras roubam 30% do dano', () => {
+        const [claws, , feast] = getCharacter('vampiro').skills;
+
+        assert.deepEqual(claws?.effects, [{ type: 'damage', power: 1.0, drain: 0.3 }]);
+        assert.deepEqual(feast?.effects, [{ type: 'damage', power: 0.85, drain: 0.5 }]);
+        assert.match(claws?.description ?? '', /30%/);
+    });
+
     it('ninguém tem mais de três habilidades ativas: a quarta virou passiva', () => {
         for (const kit of KITS) {
             assert.ok(kit.skills.length <= 3, kit.label);
@@ -306,6 +325,23 @@ describe('IA', () => {
         taunting.energy.A = 1;
 
         assert.deepEqual(chooseAction(taunting), { unitId: 'A1', skillId: 'cavaleiro.juramento-de-guarda', targetId: 'A2' });
+    });
+
+    it('entre duas habilidades de mesmo custo, usa a que causa mais dano (o lobo sem energia dilacera em vez de morder)', () => {
+        const opening = createBattle({ teamA: [getCharacter('druida')], teamB: [getCharacter('cavaleiro')], seed: 1 }).state;
+
+        opening.activeUnitId = 'A1';
+
+        const wolf = applyAction(opening, { unitId: 'A1', skillId: 'druida.forma-de-lobo' }).state;
+
+        wolf.energy.A = 0;
+
+        assert.deepEqual(chooseAction(wolf), { unitId: 'A1', skillId: 'druida.dilacerar', targetId: 'B1' });
+
+        // Com energia, o golpe em área (que custa 1) continua vindo primeiro.
+        wolf.energy.A = 1;
+
+        assert.equal(chooseAction(wolf).skillId, 'druida.frenesi');
     });
 
     it('sem ninguém ferido, ataca o inimigo com menos vida', () => {
