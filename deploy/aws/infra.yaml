@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+# Based Turn Game na AWS, em uma maquina so.
+# (Este arquivo nao usa acentos de proposito: assim ele e aceito em qualquer lugar.)
+#
+# Cria quatro coisas:
+#   1. um grupo de seguranca (o "firewall" da maquina);
+#   2. uma maquina EC2 com Ubuntu 24.04, onde rodam a API, o PostgreSQL e o site;
+#   3. um IP fixo para ela;
+#   4. uma distribuicao CloudFront na frente, que da o endereco https://....cloudfront.net.
+#
+# Como usar: console da AWS > CloudFormation > Create stack > Upload a template file.
+# O passo a passo esta em deploy/README.md.
+#
+# IMPORTANTE: depois de criada, nao use "Update" nesta stack. Uma atualizacao pode
+# recriar a maquina, e o banco de dados mora no disco dela. Apagar a stack apaga tudo
+# (e assim que se para de pagar): faca uma copia do banco antes.
+
+Description: Based Turn Game - maquina EC2 (API, PostgreSQL e site) com IP fixo e CloudFront na frente
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.micro
+      - t3.small
+    Description: Tamanho da maquina. t3.micro (1 GB de memoria) basta para comecar; t3.small tem 2 GB e custa o dobro.
+
+  DiskSizeGb:
+    Type: Number
+    Default: 20
+    MinValue: 10
+    MaxValue: 100
+    Description: Tamanho do disco da maquina, em GB.
+
+  KeyName:
+    Type: String
+    Default: ''
+    Description: (Opcional) Nome de um par de chaves EC2 que ja exista nesta regiao, para entrar por SSH do seu computador. Vazio = entrar so pelo EC2 Instance Connect, no console.
+
+  SshCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    AllowedPattern: ^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$
+    Description: De onde a porta 22 (SSH) aceita conexao. O GitHub Actions e o EC2 Instance Connect precisam alcancar a maquina, por isso o padrao e aberto. O acesso e so por chave, nunca por senha.
+
+  UbuntuAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+    Description: Nao altere. E a imagem oficial do Ubuntu 24.04 LTS, publicada pela Canonical.
+
+Conditions:
+  HasKey: !Not [!Equals [!Ref KeyName, '']]
+  IsUsEast1: !Equals [!Ref 'AWS::Region', us-east-1]
+
+Mappings:
+  # A lista de enderecos dos servidores do CloudFront (com.amazonaws.global.cloudfront.origin-facing)
+  # tem um id diferente em cada regiao.
+  CloudFrontOriginFacing:
+    ap-northeast-1: { PrefixList: pl-58a04531 }
+    ap-northeast-2: { PrefixList: pl-22a6434b }
+    ap-south-1: { PrefixList: pl-9aa247f3 }
+    ap-southeast-1: { PrefixList: pl-31a34658 }
+    ap-southeast-2: { PrefixList: pl-b8a742d1 }
+    ca-central-1: { PrefixList: pl-38a64351 }
+    eu-central-1: { PrefixList: pl-a3a144ca }
+    eu-north-1: { PrefixList: pl-fab65393 }
+    eu-west-1: { PrefixList: pl-4fa04526 }
+    eu-west-2: { PrefixList: pl-93a247fa }
+    eu-west-3: { PrefixList: pl-75b1541c }
+    sa-east-1: { PrefixList: pl-5da64334 }
+    us-east-1: { PrefixList: pl-3b927c52 }
+    us-east-2: { PrefixList: pl-b6a144df }
+    us-west-1: { PrefixList: pl-4ea04527 }
+    us-west-2: { PrefixList: pl-82a045eb }
+
+Resources:
+  # O que entra na maquina: SSH (so por chave) e HTTP vindo apenas do CloudFront.
+  # A API (3333) e o PostgreSQL (5432) nao ficam expostos: so a propria maquina fala com eles.
+  ServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Based Turn Game - SSH e HTTP vindo so do CloudFront
+      SecurityGroupIngress:
+        - Description: SSH - acesso so por chave
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SshCidr
+        - Description: HTTP vindo so do CloudFront
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: !FindInMap [CloudFrontOriginFacing, !Ref 'AWS::Region', PrefixList]
+      Tags:
+        - Key: Name
+          Value: based-turn-game
+
+  Server:
+    Type: AWS::EC2::Instance
+    # Se uma atualizacao da stack tentar trocar a maquina, a antiga (com o banco) e mantida.
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageId: !Ref UbuntuAmi
+      InstanceType: !Ref InstanceType
+      KeyName: !If [HasKey, !Ref KeyName, !Ref 'AWS::NoValue']
+      SecurityGroupIds:
+        - !GetAtt ServerSecurityGroup.GroupId
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: !Ref DiskSizeGb
+            VolumeType: gp3
+            DeleteOnTermination: true
+      # "standard": se a maquina gastar os creditos de CPU ela fica mais lenta, em vez de
+      # gerar cobranca extra (o padrao da familia T3 e cobrar).
+      CreditSpecification:
+        CPUCredits: standard
+      Tags:
+        - Key: Name
+          Value: based-turn-game
+
+  # IP fixo: nao muda quando a maquina e desligada e ligada de novo.
+  ServerAddress:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref Server
+      Tags:
+        - Key: Name
+          Value: based-turn-game
+
+  # O endereco publico do jogo. O CloudFront recebe em HTTPS e repassa para a maquina.
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Based Turn Game
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        # Todas as regioes, para que jogadores no Brasil sejam atendidos por servidores daqui.
+        PriceClass: PriceClass_All
+        Origins:
+          - Id: server
+            # O CloudFront pede um nome, nao um IP: e o nome publico que a AWS da ao IP fixo
+            # (ec2-1-2-3-4.compute-1.amazonaws.com).
+            DomainName: !If
+              - IsUsEast1
+              - !Sub
+                - ec2-${Dashed}.compute-1.amazonaws.com
+                - Dashed: !Join ['-', !Split ['.', !GetAtt ServerAddress.PublicIp]]
+              - !Sub
+                - ec2-${Dashed}.${AWS::Region}.compute.amazonaws.com
+                - Dashed: !Join ['-', !Split ['.', !GetAtt ServerAddress.PublicIp]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+              HTTPPort: 80
+              OriginReadTimeout: 30
+        # O site: arquivos estaticos, com o cache padrao do CloudFront (politica CachingOptimized).
+        # O nginx diz o que pode ficar em cache: os arquivos de /assets sim, o index.html nao.
+        DefaultCacheBehavior:
+          TargetOriginId: server
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        CacheBehaviors:
+          # A API: nada fica em cache (politica CachingDisabled) e tudo o que o navegador manda
+          # (o token de login, o idioma) e repassado (politica AllViewerExceptHostHeader).
+          - PathPattern: /api/*
+            TargetOriginId: server
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+      Tags:
+        - Key: Name
+          Value: based-turn-game
+
+Outputs:
+  SiteUrl:
+    Description: O endereco do jogo.
+    Value: !Sub https://${Distribution.DomainName}
+
+  ServerIp:
+    Description: O IP fixo da maquina. E o valor do secret DEPLOY_HOST no GitHub.
+    Value: !GetAtt ServerAddress.PublicIp
+
+  InstanceId:
+    Description: A maquina, no console do EC2.
+    Value: !Ref Server
+
+  SetupCommand:
+    Description: O comando para rodar dentro da maquina (EC2 > Connect) logo depois de criar a stack.
+    Value: !Sub >-
+      curl -fsSL https://raw.githubusercontent.com/PietroTelino/based-turn-game-api/main/deploy/server/setup-server.sh -o setup-server.sh
+      && sudo bash setup-server.sh https://${Distribution.DomainName}

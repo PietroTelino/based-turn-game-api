@@ -1,0 +1,5 @@
+# Tudo o que roda no servidor Linux ou no GitHub Actions fica com fim de linha LF,
+# em qualquer sistema. Com CRLF, os scripts quebram no Linux.
+*.sh text eol=lf
+deploy/** text eol=lf
+.github/** text eol=lf

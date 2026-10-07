@@ -2,6 +2,20 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+/**
+ * TRUST_PROXY diz ao Express em quantos proxies confiar ao ler o endereço de quem fez a
+ * requisição. Aceita um número de saltos (2), "true"/"false" ou uma lista de endereços,
+ * como a opção "trust proxy" do Express. Vazio = não confia em nenhum.
+ */
+function parseTrustProxy(value: string | undefined): number | boolean | string {
+    const text = value?.trim() ?? '';
+
+    if (text === '' || text === 'false') return false;
+    if (text === 'true') return true;
+
+    return /^\d+$/.test(text) ? Number(text) : text;
+}
+
 export const env = {
     port: Number(process.env.PORT ?? 3333),
 
@@ -27,6 +41,10 @@ export const env = {
     emailFrom: process.env.EMAIL_FROM ?? 'no-reply@localhost',
 
     frontendUrl: process.env.FRONTEND_URL,
+
+    // Quantos proxies ficam entre o jogador e a API (na AWS: CloudFront + nginx = 2).
+    // É o que faz o req.ip ser o endereço do jogador, e não o do proxy.
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
 };
 
 if (!env.dbHost || !env.dbName || !env.dbUser || !env.dbPassword) {

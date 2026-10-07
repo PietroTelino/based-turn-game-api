@@ -16,8 +16,19 @@ import { RankedService } from '../modules/ranked/ranked.service';
 import { createStatsRouter } from '../modules/stats/stats.routes';
 import { StatsRepository } from '../modules/stats/stats.repository';
 import { StatsService } from '../modules/stats/stats.service';
+import { prisma } from '../prisma';
 
 export const router = Router();
+
+// Usada pelo deploy para saber se a API subiu e se ela alcança o banco.
+router.get('/health', async (_req, res) => {
+    try {
+        await prisma.$queryRaw`SELECT 1`;
+        res.json({ status: 'ok' });
+    } catch {
+        res.status(503).json({ status: 'unavailable' });
+    }
+});
 
 router.use('/auth', authRouter);
 router.use('/users', usersRouter);

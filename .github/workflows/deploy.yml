@@ -1,0 +1,95 @@
+# A cada push na branch main: roda os testes, compila a API e publica na máquina da AWS.
+# Também dá para rodar na mão: aba Actions > "Deploy da API" > Run workflow.
+#
+# A publicação só acontece depois que os três secrets existem no repositório
+# (Settings > Secrets and variables > Actions):
+#   DEPLOY_HOST         o IP fixo da máquina
+#   DEPLOY_KNOWN_HOSTS  a identidade da máquina, para o SSH conferir que é ela mesma
+#   DEPLOY_SSH_KEY      a chave privada de deploy
+# Os três são mostrados por deploy/server/setup-server.sh. Sem eles, o workflow
+# só testa e compila.
+name: Deploy da API
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Um deploy por vez: o seguinte espera o anterior terminar.
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Testa, compila e publica
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      # Valores de mentira: aqui não há banco. O Prisma e os testes só precisam
+      # que as variáveis existam para carregar a configuração.
+      DB_HOST: localhost
+      DB_NAME: ci
+      DB_USER: ci
+      DB_PASSWORD: ci
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instala as dependências
+        run: npm ci
+
+      - name: Gera o client do Prisma
+        run: npx prisma generate
+
+      - name: Roda os testes
+        run: npm test
+
+      - name: Compila
+        run: npm run build
+
+      - name: Empacota
+        run: |
+          RELEASE_ID="$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA::7}"
+          echo "RELEASE_ID=$RELEASE_ID" >> "$GITHUB_ENV"
+          # O código-fonte vai junto: o Prisma (migrações) e o seed leem arquivos de src.
+          tar -czf "$RUNNER_TEMP/api.tgz" \
+            --exclude=./node_modules --exclude=./.git --exclude=./.github --exclude=./src/generated .
+
+      - name: Sem servidor configurado
+        if: env.DEPLOY_HOST == ''
+        run: echo "::notice::Os secrets de deploy ainda não foram cadastrados - o código foi testado e compilado, mas nada foi publicado."
+
+      - name: Prepara o SSH
+        if: env.DEPLOY_HOST != ''
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Publica na máquina
+        if: env.DEPLOY_HOST != ''
+        run: |
+          # HostKeyAlias: a identidade da máquina fica gravada como "btg-server", e não
+          # pelo IP. StrictHostKeyChecking: se não for a mesma máquina, o SSH recusa.
+          SSH_OPTS=(-i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o HostKeyAlias=btg-server
+                    -o StrictHostKeyChecking=yes -o ConnectTimeout=20)
+          REMOTE="btg@$DEPLOY_HOST"
+
+          scp "${SSH_OPTS[@]}" "$RUNNER_TEMP/api.tgz" "$REMOTE:/tmp/btg-api-$RELEASE_ID.tgz"
+          scp "${SSH_OPTS[@]}" deploy/server/deploy-api.sh "$REMOTE:/tmp/btg-api-$RELEASE_ID.sh"
+          ssh "${SSH_OPTS[@]}" "$REMOTE" \
+            "bash /tmp/btg-api-$RELEASE_ID.sh /tmp/btg-api-$RELEASE_ID.tgz $RELEASE_ID; status=\$?; rm -f /tmp/btg-api-$RELEASE_ID.sh; exit \$status"
