@@ -127,6 +127,7 @@ vence e `state.surrenderedBy` guarda o time de quem desistiu; os eventos são
 ```
 
 - `state` é o estado atual. É o que a tela desenha. `energy` é o que cada time ainda tem para gastar neste turno e `turnEnergy` é com quanto os dois começaram o turno. `turn` é o turno (a rodada em que todos agem uma vez), `order` é a ordem de ação desse turno (pode mudar no meio dele, se a velocidade de alguém mudar) e `activeUnitId` diz de quem é a vez; quem vem antes dele em `order` já agiu. `fury` é quanto a fúria aumenta o dano das habilidades no turno atual (0 = ainda não começou, 0.5 = +50%); a tela mostra como "Berserk +50%".
+- `state.arena` é o cenário: `muralha`, `floresta` ou `lago-gelado` (a lista fica em `ARENAS`, em `src/game/constants.ts`). É sorteado quando a batalha é criada, contra a IA ou entre jogadores, e fica gravado no estado, então os dois jogadores e o replay veem o mesmo. Batalhas criadas antes de existirem cenários não têm o campo; a tela usa a muralha.
 - `events` é o que aconteceu desde a resposta anterior, em ordem. É o que a tela anima. Inclui `passive_triggered` (a passiva de uma unidade agiu) e `energy_gained` (um time recuperou energia no meio do turno); os tipos todos estão em `BattleEvent`, em `src/game/types.ts`.
 - `availableActions` são os botões da unidade da vez: cada habilidade, se pode
   ser usada agora e em quem.

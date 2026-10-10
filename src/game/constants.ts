@@ -1,3 +1,5 @@
+import type { ArenaId } from './types';
+
 /** Números que definem o ritmo do jogo. Mexer aqui é balancear. */
 
 /**
@@ -30,3 +32,6 @@ export const FURY_DAMAGE_PER_TURN = 0.5;
  * abaixo desta fração do valor original.
  */
 export const MIN_STAT_FACTOR = 0.2;
+
+/** Os cenários possíveis. Cada batalha nova sorteia um deles. */
+export const ARENAS: readonly ArenaId[] = ['muralha', 'floresta', 'lago-gelado'];

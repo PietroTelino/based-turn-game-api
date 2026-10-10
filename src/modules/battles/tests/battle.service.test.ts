@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { FURY_DAMAGE_PER_TURN, FURY_START_TURN, GameRuleError, chooseAction, createBattle, getCharacter } from '../../../game';
+import { ARENAS, CHARACTERS, FURY_DAMAGE_PER_TURN, FURY_START_TURN, GameRuleError, chooseAction, createBattle, getCharacter } from '../../../game';
 import type { BattleState, GameRuleErrorCode } from '../../../game';
 import { BattleError } from '../battle.errors';
 import type { BattleErrorCode } from '../battle.errors';
@@ -783,5 +783,59 @@ describe('BattleService: prazo da partida ranqueada', () => {
         await service.surrender(GUEST, id);
 
         assert.deepEqual(finished, [`${id}:finished:A`]);
+    });
+});
+
+describe('BattleService: cenário', () => {
+    /** O sorteio devolve sempre `value`: 0 cai no primeiro cenário da lista, 0.99 no último. */
+    function withRandom(value: number) {
+        const store = new InMemoryBattleStore();
+        const service = new BattleService(store, () => value, { teamSize: 1 });
+
+        return { store, service };
+    }
+
+    it('cada batalha nova sorteia um dos três cenários, contra a IA e entre jogadores', async () => {
+        assert.deepEqual(ARENAS, ['muralha', 'floresta', 'lago-gelado']);
+
+        for (const [value, arena] of [[0, 'muralha'], [0.5, 'floresta'], [0.99, 'lago-gelado']] as const) {
+            const { service } = withRandom(value);
+            const { battle } = await service.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], seed: 1 });
+            const versusId = await service.createVersus({ hostId: PLAYER, hostTeam: ['barbaro'], guestId: OTHER_PLAYER, guestTeam: ['cavaleiro'], seed: 1 });
+
+            assert.equal(battle.state.arena, arena, `contra a IA, sorteio ${value}`);
+            assert.equal((await service.get(PLAYER, versusId)).state.arena, arena, `entre jogadores, sorteio ${value}`);
+        }
+    });
+
+    it('os dois jogadores veem o mesmo cenário, e ele continua depois de cada jogada e no replay', async () => {
+        const { store, service } = withRandom(0.5);
+        const id = await service.createVersus({ hostId: PLAYER, hostTeam: ['barbaro'], guestId: OTHER_PLAYER, guestTeam: ['cavaleiro'], seed: 1 });
+        const host = await service.get(PLAYER, id);
+        const guest = await service.get(OTHER_PLAYER, id);
+
+        assert.deepEqual([host.state.arena, guest.state.arena], ['floresta', 'floresta']);
+
+        const basic = host.availableActions[0];
+
+        assert.ok(basic);
+
+        const played = await service.act(PLAYER, id, { unitId: host.state.activeUnitId ?? '', skillId: basic.skill.id, targetId: basic.targetIds[0] ?? '' });
+
+        assert.equal(played.battle.state.arena, 'floresta');
+        assert.equal(store.initialStates.get(id)?.arena, 'floresta', 'o replay parte do estado inicial, que já tem o cenário');
+    });
+
+    it('o cenário é sorteado depois do time da IA, que continua saindo do mesmo sorteio', async () => {
+        // Primeiro número: o personagem da IA (0.99 = o último do catálogo). Segundo: o cenário (0 = muralha).
+        const draws = [0.99, 0];
+        const service = new BattleService(new InMemoryBattleStore(), () => draws.shift() ?? 0, { teamSize: 1 });
+        const { battle } = await service.create(PLAYER, { team: ['barbaro'] });
+
+        assert.deepEqual(
+            battle.state.units.filter((unit) => unit.team === 'B').map((unit) => unit.characterId),
+            [CHARACTERS[CHARACTERS.length - 1]?.id],
+        );
+        assert.equal(battle.state.arena, 'muralha');
     });
 });

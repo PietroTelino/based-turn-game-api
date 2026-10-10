@@ -410,9 +410,18 @@ export interface BattleState {
      * para mostrar o guia. Fica no estado para acompanhar a batalha gravada.
      */
     training?: boolean;
+    /**
+     * O cenário da batalha, sorteado quando ela é criada. O motor não usa: é só
+     * a tela que desenha. Fica no estado para os dois jogadores e o replay verem
+     * o mesmo. Batalhas criadas antes de haver cenários não têm (vale a muralha).
+     */
+    arena?: ArenaId;
     /** Estado do gerador de números aleatórios (ver rng.ts). */
     rngState: number;
 }
+
+/** Os cenários onde a batalha acontece. A lista em ordem fica em ARENAS (constants.ts). */
+export type ArenaId = 'muralha' | 'floresta' | 'lago-gelado';
 
 /** O que um jogador (ou a IA) pede para fazer. */
 export interface BattleAction {

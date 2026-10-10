@@ -1,4 +1,5 @@
 import {
+    ARENAS,
     CHARACTERS,
     applyAction,
     chooseAction,
@@ -10,7 +11,7 @@ import {
     surrender,
     upgradeState,
 } from '../../game';
-import type { BattleAction, BattleEvent, BattleResult, BattleState, CharacterDefinition, TeamId } from '../../game';
+import type { ArenaId, BattleAction, BattleEvent, BattleResult, BattleState, CharacterDefinition, TeamId } from '../../game';
 import { BattleError } from './battle.errors';
 import type {
     BattlePick,
@@ -150,6 +151,9 @@ export class BattleService {
             started.state.training = true;
         }
 
+        // O cenário é sorteado depois do time da IA, para não mudar o time que sai de um mesmo sorteio.
+        started.state.arena = this.pickArena();
+
         // Se as unidades da IA forem as primeiras da ordem, ela já abre a batalha.
         const { state, events } = this.playAiActions(started);
         const record = await this.store.create(userId, this.toSnapshot(state), {
@@ -175,6 +179,10 @@ export class BattleService {
             teamB,
             ...(input.seed !== undefined && { seed: input.seed }),
         });
+
+        // Sorteado aqui, uma vez, e gravado no estado: os dois jogadores veem o mesmo cenário.
+        started.state.arena = this.pickArena();
+
         const record = await this.store.create(input.hostId, this.toSnapshot(started.state), {
             opponentId: input.guestId,
             events: started.events,
@@ -390,6 +398,11 @@ export class BattleService {
         }
 
         return team;
+    }
+
+    /** Um dos cenários, ao acaso. */
+    private pickArena(): ArenaId {
+        return ARENAS[Math.floor(this.random() * ARENAS.length)] ?? 'muralha';
     }
 
     /** Enquanto a vez for de uma unidade da IA, ela joga. Acumula os eventos de todas as jogadas. */
