@@ -13,7 +13,8 @@ export type GameRuleErrorCode =
     | 'SKILL_NOT_FOUND'
     | 'NOT_ENOUGH_ENERGY'
     | 'TARGET_REQUIRED'
-    | 'INVALID_TARGET';
+    | 'INVALID_TARGET'
+    | 'SKILL_USED_UP';
 
 export class GameRuleError extends Error {
     readonly code: GameRuleErrorCode;

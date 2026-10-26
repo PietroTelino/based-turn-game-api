@@ -8,6 +8,7 @@ import {
     getStatusTickDamage,
     getUnit,
     hasStatus,
+    POSITIVE_STATUSES,
 } from './engine';
 import type { AvailableAction, BattleAction, BattleState, BattleUnit } from './types';
 
@@ -18,8 +19,8 @@ import type { AvailableAction, BattleAction, BattleState, BattleUnit } from './t
  *    recupera mais vida no total (em área só compensa com vários feridos);
  * 2. senão, se algum aliado está atordoado ou levando dano pesado de veneno
  *    ou queimadura, usa uma habilidade que purifica nele;
- * 3. senão, quem pode erguer um cadáver ergue (uma unidade a mais no time
- *    vale mais que qualquer golpe); e quem pode se transformar se transforma: na forma mais resistente
+ * 3. senão, quem pode erguer ou reviver um cadáver o faz (uma unidade a mais
+ *    no time vale mais que qualquer golpe); e quem pode se transformar se transforma: na forma mais resistente
  *    se está com menos da metade da vida, na de mais ataque se está bem;
  *    quem tem uma postura sem custo (um bônus em si mesma, como a Postura
  *    de Duelo) entra nela sempre que não está;
@@ -27,7 +28,8 @@ import type { AvailableAction, BattleAction, BattleState, BattleUnit } from './t
  *    empate, a provocação primeiro e depois o golpe de mais dano no
  *    total), pulando as de suporte (escudo, bônus)
  *    que não acrescentariam nada porque os alvos já estão com o efeito;
- * 5. ataques miram em quem tem menos vida; suporte vai para o aliado mais
+ * 5. ataques miram em quem tem menos vida (quem tira efeitos, em quem tem
+ *    mais efeitos a perder); suporte vai para o aliado mais
  *    ferido que ainda não tem o efeito. Se um inimigo está provocando, o
  *    motor só oferece ele como alvo dos golpes de alvo único.
  *
@@ -45,7 +47,7 @@ function decide(state: BattleState, useStance: boolean): BattleAction {
     }
 
     const actor = getUnit(state, state.activeUnitId);
-    const options = getAvailableActions(state).filter((option) => option.usable);
+    const options = getAvailableActions(state, { previews: false }).filter((option) => option.usable);
 
     const heal = chooseHeal(state, actor, options.filter(isHeal));
 
@@ -59,8 +61,8 @@ function decide(state: BattleState, useStance: boolean): BattleAction {
         return purify;
     }
 
-    // Invocação: só aparece como utilizável quando há cadáver e energia.
-    const summon = options.find((option) => option.skill.effects.some((effect) => effect.type === 'summon'));
+    // Invocação ou ressurreição: só aparece como utilizável quando há cadáver e energia.
+    const summon = options.find((option) => option.skill.effects.some((effect) => effect.type === 'summon' || effect.type === 'revive'));
 
     if (summon) {
         return toAction(actor.id, summon, undefined);
@@ -95,7 +97,10 @@ function decide(state: BattleState, useStance: boolean): BattleAction {
 
     for (const option of byCost) {
         if (!isSupport(option)) {
-            const target = lowest(state, option.targetIds, (unit) => unit.hp);
+            // Quem tira efeitos (Julgamento) mira em quem tem mais efeitos a perder; no empate, no de menos vida.
+            const target = isDispel(option)
+                ? lowest(state, option.targetIds, (unit) => -positiveCount(unit) * 100000 + unit.hp)
+                : lowest(state, option.targetIds, (unit) => unit.hp);
 
             return toAction(actor.id, option, target?.id);
         }
@@ -133,7 +138,7 @@ export function chooseTrainingAction(state: BattleState): BattleAction {
     }
 
     const actor = getUnit(state, state.activeUnitId);
-    const options = getAvailableActions(state).filter((option) => option.usable);
+    const options = getAvailableActions(state, { previews: false }).filter((option) => option.usable);
     const normal = decide(state, false);
     const hasSpent = state.energy[actor.team] < state.turnEnergy;
 
@@ -229,6 +234,15 @@ function totalPower(option: AvailableAction): number {
     const power = option.skill.effects.reduce((total, effect) => total + (effect.type === 'damage' ? effect.power : 0), 0);
 
     return power * (option.requiresTarget ? 1 : option.targetIds.length);
+}
+
+function isDispel(option: AvailableAction): boolean {
+    return option.requiresTarget && option.skill.effects.some((effect) => effect.type === 'dispel');
+}
+
+/** Quantos status que ajudam a unidade ela carrega (os que o efeito 'dispel' tira). */
+function positiveCount(unit: BattleUnit): number {
+    return getStatuses(unit).filter((status) => POSITIVE_STATUSES.includes(status.kind)).length;
 }
 
 function isTaunt(option: AvailableAction): boolean {

@@ -95,6 +95,12 @@ const STAT_MODIFIERS: Partial<Record<StatusKind, { stat: 'atk' | 'def' | 'speed'
 /** Os status que atrapalham quem os carrega. São os que a purificação (efeito 'cleanse') remove. */
 export const NEGATIVE_STATUSES: StatusKind[] = ['stun', 'burn', 'poison', 'bleed', 'heal_down', 'atk_down', 'def_down', 'speed_down'];
 
+/**
+ * Os status que ajudam quem os carrega. São os que o efeito 'dispel' remove.
+ * A transformação (form) fica de fora: ela é a própria unidade, não um bônus.
+ */
+export const POSITIVE_STATUSES: StatusKind[] = ['shield', 'atk_up', 'def_up', 'speed_up', 'passive_up', 'taunt', 'stealth', 'counter', 'guard'];
+
 /** Os status que causam dano no começo da vez de quem os carrega. */
 export const DAMAGE_STATUSES: StatusKind[] = ['burn', 'poison', 'bleed'];
 
@@ -192,8 +198,11 @@ interface HitModifiers {
     energyOnCrit: number;
     /** Status que o golpe também aplica no alvo, depois do dano. */
     statusOnHit: StatusSkillEffect[];
-    /** As passivas que só valeram por causa deste alvo: são as que a tela anuncia. */
-    announced: PassiveDefinition[];
+    /**
+     * As passivas que só valeram por causa deste alvo: são as que a tela
+     * anuncia. `unit` é quem tem a passiva (um aliado, no bônus de time).
+     */
+    announced: { unit: BattleUnit; passive: PassiveDefinition }[];
 }
 
 /**
@@ -223,7 +232,7 @@ function getHitModifiers(state: BattleState, attacker: BattleUnit, target?: Batt
                 if (effect.type === 'damage_bonus') modifiers.damageBonus += effect.amount;
                 else modifiers.critChanceBonus += effect.amount;
 
-                if (effect.when) modifiers.announced.push(passive);
+                if (effect.when) modifiers.announced.push({ unit: attacker, passive });
 
                 break;
             }
@@ -252,6 +261,7 @@ function getHitModifiers(state: BattleState, attacker: BattleUnit, target?: Batt
 
             // Cada carga acumulada soma ao dano. Vale em todo golpe: entra na prévia e não é anunciada aqui.
             case 'damage_per_drain':
+            case 'damage_per_dispel':
                 modifiers.damageBonus += effect.amount * (attacker.passiveStacks ?? 0);
                 break;
 
@@ -277,7 +287,23 @@ function getHitModifiers(state: BattleState, attacker: BattleUnit, target?: Batt
             case 'stealth_each_turn':
             case 'battle_start':
             case 'turn_start':
+            case 'energy_when_empty':
+            // O bônus de time é contado logo abaixo, junto com o dos aliados.
+            case 'team_damage_bonus':
                 break;
+        }
+    }
+
+    // Bônus de time: as passivas team_damage_bonus de quem está vivo no time
+    // (a própria unidade inclusive) valem para os golpes dela.
+    for (const ally of state.units) {
+        if (ally.team !== attacker.team || !isAlive(ally)) continue;
+
+        for (const { passive, effect } of getPassiveEffects(ally)) {
+            if (effect.type === 'team_damage_bonus' && target && meets(effect.when, target)) {
+                modifiers.damageBonus += effect.amount;
+                modifiers.announced.push({ unit: ally, passive });
+            }
         }
     }
 
@@ -443,8 +469,12 @@ export function getStatusTickDamage(status: StatusEffect): number {
     return Math.max(1, Math.round(status.value * (1 + (status.growth ?? 0) * (status.ticks ?? 0))));
 }
 
-/** O que a unidade da vez pode fazer agora. */
-export function getAvailableActions(state: BattleState): AvailableAction[] {
+/**
+ * O que a unidade da vez pode fazer agora. Com `previews: false`, a prévia em
+ * cada alvo (`targets`) fica vazia: ela faz a habilidade numa cópia do campo
+ * para cada alvo, e quem só precisa escolher a jogada (a IA) não usa.
+ */
+export function getAvailableActions(state: BattleState, options: { previews?: boolean } = {}): AvailableAction[] {
     const actor = getActiveUnit(state);
 
     if (!actor) {
@@ -455,16 +485,23 @@ export function getAvailableActions(state: BattleState): AvailableAction[] {
         const candidates = getCandidateTargets(state, actor, skill);
         const targetIds = candidates.map((u) => u.id);
         const hasEnergy = state.energy[actor.team] >= skill.energyCost;
+        const usesLeft = getUsesLeft(actor, skill);
 
         return {
             skill,
             preview: previewSkill(state, actor, skill),
-            targets: previewTargets(state, actor, skill, candidates),
-            usable: hasEnergy && targetIds.length > 0,
+            targets: options.previews === false ? [] : previewTargets(state, actor, skill, candidates),
+            usesLeft,
+            usable: hasEnergy && targetIds.length > 0 && usesLeft !== 0,
             requiresTarget: requiresTarget(skill),
             targetIds,
         };
     });
+}
+
+/** Quantos usos da habilidade ainda restam a `unit` na batalha (`null` quando ela não tem limite). */
+export function getUsesLeft(unit: BattleUnit, skill: SkillDefinition): number | null {
+    return skill.uses === undefined ? null : Math.max(0, skill.uses - (unit.skillUses?.[skill.id] ?? 0));
 }
 
 /**
@@ -512,18 +549,22 @@ export function previewTargets(state: BattleState, actor: BattleUnit, skill: Ski
     const groups = requiresTarget(skill) ? targets.map((target) => [target.id]) : [targets.map((target) => target.id)];
     const previews: TargetPreview[] = [];
 
-    for (const ids of groups) {
+    for (const chosen of groups) {
+        // Alvo protegido (status guard): o golpe vai para o protetor, e é nele que a conta é feita.
+        const ids = chosen.map((id) => getGuardian(state, actor, skill, getUnit(state, id))?.id ?? id);
         const plain = simulateSkill(state, actor.id, skill, ids, false);
         const crit = simulateSkill(state, actor.id, skill, ids, true);
 
-        for (const id of ids) {
+        for (const [index, id] of ids.entries()) {
             const hits = (events: BattleEvent[]) =>
                 events.filter((event): event is Extract<BattleEvent, { type: 'damage' }> => event.type === 'damage' && event.sourceId === actor.id && event.targetId === id);
             const heals = plain.events.filter((event) => event.type === 'heal' && event.sourceId === actor.id && event.targetId === id);
             const target = getUnit(state, id);
+            const chosenId = chosen[index]!;
 
             previews.push({
-                unitId: id,
+                ...(chosenId !== id && { guardedBy: id }),
+                unitId: chosenId,
                 damage: hasDamage ? hits(plain.events).reduce((sum, hit) => sum + hit.amount, 0) : null,
                 critDamage: hasDamage ? hits(crit.events).reduce((sum, hit) => sum + hit.amount, 0) : null,
                 critChance: hasDamage ? Math.min(1, actor.stats.critChance + getHitModifiers(state, actor, target).critChanceBonus) : 0,
@@ -558,14 +599,7 @@ function simulateSkill(state: BattleState, actorId: string, skill: SkillDefiniti
     previewCrits = crits;
 
     try {
-        for (const effect of skill.effects) {
-            const receivers = effect.type === 'status' && effect.to === 'self' ? [self] : targets;
-            const fieldBonus = getEnemyStatusBonus(sim, self);
-
-            for (const receiver of receivers) {
-                applyEffect(sim, self, receiver, effect, events, fieldBonus);
-            }
-        }
+        applySkillEffects(sim, self, skill.effects, targets, events);
     } finally {
         previewCrits = null;
     }
@@ -676,15 +710,26 @@ export function applyAction(current: BattleState, action: BattleAction): BattleR
         throw new GameRuleError('NOT_ENOUGH_ENERGY', `Energia insuficiente para ${skill.name}`);
     }
 
-    const targets = resolveTargets(state, actor, skill, action.targetId);
+    if (getUsesLeft(actor, skill) === 0) {
+        throw new GameRuleError('SKILL_USED_UP', `${skill.name} já foi usada nesta batalha`);
+    }
+
+    const chosen = resolveTargets(state, actor, skill, action.targetId);
+    // Alvo protegido (status guard): o golpe de alvo único vai para quem o protege.
+    const guardian = chosen.length === 1 ? getGuardian(state, actor, skill, chosen[0]!) : undefined;
+    const targets = guardian ? [guardian] : chosen;
 
     // Habilidade sem ninguém para atingir (erguer um cadáver sem cadáver no time) não pode ser usada.
     if (targets.length === 0) {
         throw new GameRuleError('INVALID_TARGET', `${skill.name} não tem alvo`);
     }
 
-    // 2. Pagar o custo
+    // 2. Pagar o custo (e contar o uso, se a habilidade tem limite)
     state.energy[actor.team] -= skill.energyCost;
+
+    if (skill.uses !== undefined) {
+        actor.skillUses = { ...actor.skillUses, [skill.id]: (actor.skillUses?.[skill.id] ?? 0) + 1 };
+    }
 
     events.push({
         type: 'skill_used',
@@ -695,6 +740,10 @@ export function applyAction(current: BattleState, action: BattleAction): BattleR
         energy: state.energy[actor.team],
     });
 
+    if (guardian) {
+        events.push({ type: 'guarded', unitId: guardian.id, protectedId: chosen[0]!.id });
+    }
+
     // Quem age sai do esconderijo antes do golpe.
     reveal(actor, events);
 
@@ -704,15 +753,7 @@ export function applyAction(current: BattleState, action: BattleAction): BattleR
     const extraOnTransform = getPassiveEffects(actor).some(({ effect }) => effect.type === 'extra_action_on_transform');
     const formBefore = actor.form;
 
-    for (const effect of skill.effects) {
-        const receivers = effect.type === 'status' && effect.to === 'self' ? [actor] : targets;
-        // Contado uma vez por golpe, antes dele: em área, vale igual para todos os alvos.
-        const fieldBonus = getEnemyStatusBonus(state, actor);
-
-        for (const receiver of receivers) {
-            applyEffect(state, actor, receiver, effect, events, fieldBonus);
-        }
-    }
+    applySkillEffects(state, actor, skill.effects, targets, events);
 
     announceStacks(actor, stacksBefore, events);
 
@@ -796,7 +837,9 @@ function getCandidateTargets(state: BattleState, actor: BattleUnit, skill: Skill
         }
         case 'all-enemies':
             return state.units.filter((u) => u.team !== actor.team && isAlive(u));
+        // Proteger (status guard) é sempre outro aliado: protegendo a si mesma, a unidade não mudaria nada.
         case 'single-ally':
+            return state.units.filter((u) => u.team === actor.team && isAlive(u) && !(u.id === actor.id && appliesGuard(skill)));
         case 'all-allies':
             return state.units.filter((u) => u.team === actor.team && isAlive(u));
         case 'self':
@@ -805,6 +848,11 @@ function getCandidateTargets(state: BattleState, actor: BattleUnit, skill: Skill
         case 'corpse':
             return state.units.filter((u) => u.team === actor.team && isCorpse(u)).slice(0, 1);
     }
+}
+
+/** A habilidade põe o status guard (proteção) no alvo. */
+function appliesGuard(skill: SkillDefinition): boolean {
+    return skill.effects.some((effect) => effect.type === 'status' && effect.status === 'guard' && effect.to !== 'self');
 }
 
 /** As unidades que a habilidade VAI atingir nesta ação. */
@@ -833,6 +881,43 @@ function resolveTargets(
     return [target];
 }
 
+/**
+ * Quem recebe cada efeito: os alvos da habilidade, a não ser o status com
+ * `to: 'self'` (vai em quem usou) e a energia (vale uma vez por ação, não uma
+ * por alvo; quem usou é só a referência do time).
+ */
+function receiversOf(effect: SkillEffect, actor: BattleUnit, targets: BattleUnit[]): BattleUnit[] {
+    return (effect.type === 'status' && effect.to === 'self') || effect.type === 'energy' ? [actor] : targets;
+}
+
+/** Os efeitos de uma habilidade, na ordem, em quem cada um atinge. */
+function applySkillEffects(state: BattleState, actor: BattleUnit, effects: SkillEffect[], targets: BattleUnit[], events: BattleEvent[]): void {
+    for (const effect of effects) {
+        // Contado uma vez por golpe, antes dele: em área, vale igual para todos os alvos.
+        const fieldBonus = getEnemyStatusBonus(state, actor);
+
+        for (const receiver of receiversOf(effect, actor, targets)) {
+            applyEffect(state, actor, receiver, effect, events, fieldBonus);
+        }
+    }
+}
+
+/**
+ * Quem protege `target` do golpe de alvo único de `actor` (status guard): o
+ * aliado de `target` que aplicou a proteção, se ainda está vivo. Só vale para
+ * habilidades contra um inimigo; `undefined` quando não há proteção.
+ */
+function getGuardian(state: BattleState, actor: BattleUnit, skill: SkillDefinition, target: BattleUnit): BattleUnit | undefined {
+    if (skill.target !== 'single-enemy' || target.team === actor.team) {
+        return undefined;
+    }
+
+    const guard = getStatuses(target).find((status) => status.kind === 'guard');
+    const guardian = guard ? state.units.find((unit) => unit.id === guard.sourceId) : undefined;
+
+    return guardian && guardian.id !== target.id && guardian.team === target.team && isAlive(guardian) ? guardian : undefined;
+}
+
 function applyEffect(
     state: BattleState,
     actor: BattleUnit,
@@ -842,9 +927,26 @@ function applyEffect(
     /** O bônus de dano que depende do campo, contado antes deste golpe (veja getEnemyStatusBonus). */
     fieldBonus?: number,
 ): void {
-    // Erguer um cadáver é o único efeito que age sobre uma unidade derrotada.
+    // Erguer um cadáver e reviver são os únicos efeitos que agem sobre uma unidade derrotada.
     if (effect.type === 'summon') {
         raiseCorpse(state, actor, target, effect.summon, events);
+
+        return;
+    }
+
+    if (effect.type === 'revive') {
+        revive(state, actor, target, effect.ratio, events);
+
+        return;
+    }
+
+    // A energia é do time, não do alvo: vale mesmo que ele tenha caído.
+    if (effect.type === 'energy') {
+        if (effect.team === 'own') {
+            gainEnergy(state, actor, effect.amount, events);
+        } else {
+            drainEnergy(state, actor, effect.amount, events);
+        }
 
         return;
     }
@@ -856,87 +958,12 @@ function applyEffect(
 
     switch (effect.type) {
         case 'damage': {
-            const modifiers = getHitModifiers(state, actor, target, fieldBonus);
+            strike(state, actor, target, effect, events, fieldBonus);
 
-            // Uma passiva que só valeu por causa do alvo é anunciada antes do
-            // dano que ela mudou, uma vez por ação.
-            for (const passive of modifiers.announced) {
-                announcePassive(actor, passive, [target.id], events);
-            }
-
-            // Sempre um sorteio por golpe, com ou sem passiva: a sequência de
-            // números aleatórios da batalha não depende de quem tem o quê.
-            const critical = previewCrits ?? rollChance(state, actor.stats.critChance + modifiers.critChanceBonus);
-            const defender = getEffectiveStats(target);
-            // Golpe de execução: quanto mais vida o alvo já perdeu, mais forte.
-            const executeBonus = ((effect.perTargetMissingHp ?? 0) * getMissingHpPercent(target)) / 100;
-            const amount = calculateDamage(
-                getAttackStats(actor),
-                { ...defender, def: defender.def * Math.max(0, 1 - modifiers.ignoreDefense) },
-                effect.power,
-                critical,
-                getFuryMultiplier(state.turn) * (1 + modifiers.damageBonus + executeBonus),
-            );
-            const absorbed = absorbWithShield(target, amount);
-            const lost = Math.min(target.hp, amount - absorbed);
-
-            target.hp -= lost;
-            events.push({
-                type: 'damage',
-                sourceId: actor.id,
-                targetId: target.id,
-                amount,
-                absorbed,
-                critical,
-                hp: target.hp,
-            });
-
-            // Levar um golpe (em área, ou de uma passiva que escolhe o alvo sozinha) revela quem estava escondido.
-            if (isAlive(target)) {
-                reveal(target, events);
-            }
-
-            if (absorbed > 0) {
-                if (!hasStatus(target, 'shield')) {
-                    events.push({ type: 'status_expired', unitId: target.id, status: 'shield' });
-                }
-
-                pushStatusesChanged(target, events);
-            }
-
-            // Roubo de vida: quem bateu recupera uma fração do que o alvo
-            // perdeu. O da habilidade e o da passiva se somam.
-            const drain = (effect.drain ?? 0) + modifiers.lifesteal;
-
-            if (drain > 0 && lost > 0) {
-                const healed = Math.min(actor.stats.maxHp - actor.hp, Math.round(lost * drain * getHealingFactor(actor)));
-
-                if (healed > 0) {
-                    actor.hp += healed;
-                    events.push({ type: 'heal', sourceId: actor.id, targetId: actor.id, amount: healed, hp: actor.hp });
-                    gainDrainStack(actor);
-                }
-            }
-
-            // Passiva de energia: o acerto crítico devolve energia ao time.
-            if (critical && modifiers.energyOnCrit > 0) {
-                gainEnergy(state, actor, modifiers.energyOnCrit, events);
-            }
-
-            if (!isAlive(target)) {
-                defeat(state, target, events);
-
-                return;
-            }
-
-            // Passiva de status no golpe: o alvo que ficou de pé recebe o
-            // status. Se já tem o mesmo status mais forte, fica o que tem.
-            for (const onHit of modifiers.statusOnHit) {
-                const current = target.statuses.find((status) => status.kind === onHit.status);
-
-                if (!current || current.value <= calculateStatusValue(getEffectiveStats(actor), onHit)) {
-                    applyEffect(state, actor, target, onHit, events);
-                }
+            // Golpe que salta: depois do alvo, outros inimigos sorteados, cada
+            // salto mais fraco. Na prévia não salta: o sorteio diria o futuro.
+            if (effect.bounces && previewCrits === null) {
+                bounce(state, actor, target, effect, events, fieldBonus);
             }
 
             return;
@@ -1007,6 +1034,23 @@ function applyEffect(
             return;
         }
 
+        case 'dispel': {
+            const kinds = effect.statuses ?? POSITIVE_STATUSES;
+            const removed = target.statuses.filter((status) => kinds.includes(status.kind)).map((status) => status.kind);
+
+            // Nada a tirar: passa em branco, sem evento.
+            if (removed.length === 0) {
+                return;
+            }
+
+            target.statuses = target.statuses.filter((status) => !kinds.includes(status.kind));
+            events.push({ type: 'dispelled', sourceId: actor.id, targetId: target.id, statuses: removed });
+            pushStatusesChanged(target, events);
+            gainDispelStacks(actor, removed.length);
+
+            return;
+        }
+
         case 'transform': {
             setForm(target, effect.form, events);
 
@@ -1020,6 +1064,149 @@ function applyEffect(
 
             return;
         }
+    }
+}
+
+/**
+ * Um golpe (efeito 'damage') de `actor` em `target`: crítico, defesa, escudo,
+ * roubo de vida e os status que as passivas aplicam no golpe.
+ */
+function strike(
+    state: BattleState,
+    actor: BattleUnit,
+    target: BattleUnit,
+    effect: Extract<SkillEffect, { type: 'damage' }>,
+    events: BattleEvent[],
+    fieldBonus?: number,
+): void {
+    if (!isAlive(target)) {
+        return;
+    }
+
+    const modifiers = getHitModifiers(state, actor, target, fieldBonus);
+
+    // Uma passiva que só valeu por causa do alvo é anunciada antes do
+    // dano que ela mudou, uma vez por ação.
+    for (const { unit, passive } of modifiers.announced) {
+        announcePassive(unit, passive, [target.id], events);
+    }
+
+    // Sempre um sorteio por golpe, com ou sem passiva: a sequência de
+    // números aleatórios da batalha não depende de quem tem o quê.
+    const critical = previewCrits ?? rollChance(state, actor.stats.critChance + modifiers.critChanceBonus);
+    const defender = getEffectiveStats(target);
+    // Golpe de execução: quanto mais vida o alvo já perdeu, mais forte.
+    const executeBonus = ((effect.perTargetMissingHp ?? 0) * getMissingHpPercent(target)) / 100;
+    const amount = calculateDamage(
+        getAttackStats(actor),
+        { ...defender, def: defender.def * Math.max(0, 1 - modifiers.ignoreDefense) },
+        effect.power,
+        critical,
+        getFuryMultiplier(state.turn) * (1 + modifiers.damageBonus + executeBonus),
+    );
+    const absorbed = absorbWithShield(target, amount);
+    const lost = Math.min(target.hp, amount - absorbed);
+
+    target.hp -= lost;
+    events.push({
+        type: 'damage',
+        sourceId: actor.id,
+        targetId: target.id,
+        amount,
+        absorbed,
+        critical,
+        hp: target.hp,
+    });
+
+    // Levar um golpe (em área, ou de uma passiva que escolhe o alvo sozinha) revela quem estava escondido.
+    if (isAlive(target)) {
+        reveal(target, events);
+    }
+
+    if (absorbed > 0) {
+        if (!hasStatus(target, 'shield')) {
+            events.push({ type: 'status_expired', unitId: target.id, status: 'shield' });
+        }
+
+        pushStatusesChanged(target, events);
+    }
+
+    // Roubo de vida: quem bateu recupera uma fração do que o alvo
+    // perdeu. O da habilidade e o da passiva se somam.
+    const drain = (effect.drain ?? 0) + modifiers.lifesteal;
+
+    if (drain > 0 && lost > 0) {
+        const healed = Math.min(actor.stats.maxHp - actor.hp, Math.round(lost * drain * getHealingFactor(actor)));
+
+        if (healed > 0) {
+            actor.hp += healed;
+            events.push({ type: 'heal', sourceId: actor.id, targetId: actor.id, amount: healed, hp: actor.hp });
+            gainDrainStack(actor);
+        }
+    }
+
+    // Passiva de energia: o acerto crítico devolve energia ao time.
+    if (critical && modifiers.energyOnCrit > 0 && state.energy[actor.team] < MAX_ENERGY) {
+        for (const { passive, effect: item } of getPassiveEffects(actor)) {
+            if (item.type === 'energy_on_crit') {
+                announcePassive(actor, passive, [], events);
+            }
+        }
+
+        gainEnergy(state, actor, modifiers.energyOnCrit, events);
+    }
+
+    if (!isAlive(target)) {
+        defeat(state, target, events);
+
+        return;
+    }
+
+    // Passiva de status no golpe: o alvo que ficou de pé recebe o
+    // status. Se já tem o mesmo status mais forte, fica o que tem.
+    for (const onHit of modifiers.statusOnHit) {
+        const current = target.statuses.find((status) => status.kind === onHit.status);
+
+        if (!current || current.value <= calculateStatusValue(getEffectiveStats(actor), onHit)) {
+            applyEffect(state, actor, target, onHit, events);
+        }
+    }
+
+    return;
+}
+
+/**
+ * Os saltos de um golpe com `bounces`: a partir de `first`, o golpe pula para
+ * outro inimigo vivo de `actor` ainda não atingido por ele, sorteado, e cada
+ * salto tem `falloff` a menos de força que o anterior. Para quando acabam os
+ * saltos ou os inimigos.
+ */
+function bounce(
+    state: BattleState,
+    actor: BattleUnit,
+    first: BattleUnit,
+    effect: Extract<SkillEffect, { type: 'damage' }>,
+    events: BattleEvent[],
+    fieldBonus?: number,
+): void {
+    const hit = [first.id];
+    let from = first;
+    let power = effect.power;
+
+    for (let jump = 0; jump < (effect.bounces ?? 0); jump++) {
+        const options = state.units.filter((unit) => unit.team !== actor.team && isAlive(unit) && !hit.includes(unit.id));
+
+        if (options.length === 0) {
+            return;
+        }
+
+        const next = options[Math.min(options.length - 1, Math.floor(roll(state) * options.length))]!;
+
+        power *= 1 - (effect.falloff ?? 0);
+        hit.push(next.id);
+        events.push({ type: 'chain_jump', sourceId: actor.id, fromId: from.id, toId: next.id });
+        strike(state, actor, next, { type: 'damage', power }, events, fieldBonus);
+        from = next;
     }
 }
 
@@ -1071,6 +1258,33 @@ function raiseCorpse(state: BattleState, actor: BattleUnit, corpse: BattleUnit, 
     events.push({ type: 'order_changed', order: [...state.order] });
 
     syncCorpseCounts(state, raised.team, events);
+}
+
+/**
+ * Traz de volta o aliado caído `unit`, como ele era, com `ratio` da vida
+ * máxima e sem status. Quem estava transformado volta na forma original.
+ * Como a invocação, ele entra na fila de quem ainda vai agir neste turno.
+ */
+function revive(state: BattleState, actor: BattleUnit, unit: BattleUnit, ratio: number, events: BattleEvent[]): void {
+    if (!isCorpse(unit)) {
+        return;
+    }
+
+    if (unit.form !== undefined) {
+        setForm(unit, null, []);
+    }
+
+    unit.hp = Math.max(1, Math.round(unit.stats.maxHp * ratio));
+    unit.statuses = [];
+    delete unit.passiveStacks;
+    events.push({ type: 'revived', sourceId: actor.id, unitId: unit.id, hp: unit.hp });
+
+    state.order = [...state.order.filter((unitId) => unitId !== unit.id), unit.id];
+    state.draws[unit.id] = roll(state);
+    reorderWaiting(state, []);
+    events.push({ type: 'order_changed', order: [...state.order] });
+
+    syncCorpseCounts(state, unit.team, events);
 }
 
 /**
@@ -1142,6 +1356,15 @@ function gainDrainStack(unit: BattleUnit): void {
     }
 }
 
+/** A unidade tirou `count` status de inimigos: a passiva damage_per_dispel ganha uma carga por status (até o limite). */
+function gainDispelStacks(unit: BattleUnit, count: number): void {
+    for (const { effect } of getPassiveEffects(unit)) {
+        if (effect.type === 'damage_per_dispel') {
+            unit.passiveStacks = Math.min(effect.max ?? Infinity, (unit.passiveStacks ?? 0) + count);
+        }
+    }
+}
+
 /** Avisa a tela, uma vez por ação, que a passiva de `unit` ganhou cargas e quantas ela tem agora. */
 function announceStacks(unit: BattleUnit, stacksBefore: number, events: BattleEvent[]): void {
     const stacks = unit.passiveStacks ?? 0;
@@ -1151,7 +1374,7 @@ function announceStacks(unit: BattleUnit, stacksBefore: number, events: BattleEv
     }
 
     for (const { passive, effect } of getPassiveEffects(unit)) {
-        if (effect.type === 'damage_per_drain') {
+        if (effect.type === 'damage_per_drain' || effect.type === 'damage_per_dispel') {
             events.push({ type: 'passive_triggered', unitId: unit.id, passiveId: passive.id, targetIds: [], stacks });
         }
     }
@@ -1196,14 +1419,20 @@ function gainEnergy(state: BattleState, unit: BattleUnit, amount: number, events
     }
 
     state.energy[unit.team] += gained;
+    events.push({ type: 'energy_gained', team: unit.team, unitId: unit.id, amount: gained, energy: state.energy[unit.team] });
+}
 
-    for (const { passive, effect } of getPassiveEffects(unit)) {
-        if (effect.type === 'energy_on_crit') {
-            announcePassive(unit, passive, [], events);
-        }
+/** O time adversário de `unit` perde até `amount` de energia (não fica negativa). */
+function drainEnergy(state: BattleState, unit: BattleUnit, amount: number, events: BattleEvent[]): void {
+    const team: TeamId = unit.team === 'A' ? 'B' : 'A';
+    const lost = Math.min(amount, state.energy[team]);
+
+    if (lost <= 0) {
+        return;
     }
 
-    events.push({ type: 'energy_gained', team: unit.team, unitId: unit.id, amount: gained, energy: state.energy[unit.team] });
+    state.energy[team] -= lost;
+    events.push({ type: 'energy_lost', team, unitId: unit.id, amount: lost, energy: state.energy[team] });
 }
 
 /**
@@ -1213,6 +1442,9 @@ function gainEnergy(state: BattleState, unit: BattleUnit, amount: number, events
  * - all-allies: os aliados vivos. Se a passiva só cura, quem está com a vida
  *   cheia fica de fora (e, se ninguém precisa, ela nem é anunciada).
  * - fastest-enemy: o inimigo vivo mais veloz agora.
+ * - lowest-ally: o aliado vivo com a menor fração da vida (pode ser ela).
+ *
+ * A energy_when_empty também age aqui: se o time está sem energia, recupera.
  *
  * Se a unidade carrega o status passive_up, a cura e o dano da passiva saem
  * mais fortes (o valor do status é a fração: 0.8 = 80% a mais). Os status que
@@ -1220,6 +1452,12 @@ function gainEnergy(state: BattleState, unit: BattleUnit, amount: number, events
  */
 function applyTurnStartPassives(state: BattleState, unit: BattleUnit, events: BattleEvent[]): void {
     for (const { passive, effect } of getPassiveEffects(unit)) {
+        if (effect.type === 'energy_when_empty' && isAlive(unit) && state.energy[unit.team] === 0) {
+            events.push({ type: 'passive_triggered', unitId: unit.id, passiveId: passive.id, targetIds: [] });
+            gainEnergy(state, unit, effect.amount, events);
+            continue;
+        }
+
         if (effect.type !== 'turn_start' || !isAlive(unit)) {
             continue;
         }
@@ -1230,6 +1468,10 @@ function applyTurnStartPassives(state: BattleState, unit: BattleUnit, events: Ba
             const onlyHeals = effect.effects.every((item) => item.type === 'heal');
 
             targets = state.units.filter((ally) => ally.team === unit.team && isAlive(ally) && (!onlyHeals || ally.hp < ally.stats.maxHp));
+        } else if (effect.target === 'lowest-ally') {
+            const allies = state.units.filter((ally) => ally.team === unit.team && isAlive(ally));
+
+            targets = allies.sort((a, b) => a.hp / a.stats.maxHp - b.hp / b.stats.maxHp).slice(0, 1);
         } else {
             targets = sortBySpeed(state, state.units.filter((enemy) => enemy.team !== unit.team && isAlive(enemy))).slice(0, 1);
         }
@@ -1248,7 +1490,7 @@ function applyTurnStartPassives(state: BattleState, unit: BattleUnit, events: Ba
             const boosted = item.type === 'damage' || item.type === 'heal' ? { ...item, power: item.power * boost } : item;
             const fieldBonus = getEnemyStatusBonus(state, unit);
 
-            for (const target of item.type === 'status' && item.to === 'self' ? [unit] : targets) {
+            for (const target of receiversOf(item, unit, targets)) {
                 applyEffect(state, unit, target, boosted, events, fieldBonus);
             }
         }
@@ -1305,9 +1547,7 @@ function applyCounterAttacks(state: BattleState, attacker: BattleUnit, events: B
 
         events.push({ type: 'counter_attack', unitId: unit.id, skillId: basic.id, targetIds: [target.id] });
 
-        for (const effect of basic.effects) {
-            applyEffect(state, unit, effect.type === 'status' && effect.to === 'self' ? unit : target, effect, events, getEnemyStatusBonus(state, unit));
-        }
+        applySkillEffects(state, unit, basic.effects, [target], events);
 
         announceStacks(unit, stacksBefore, events);
     }
@@ -1365,7 +1605,7 @@ function applyBattleStartPassives(state: BattleState, events: BattleEvent[]): vo
             events.push({ type: 'passive_triggered', unitId: unit.id, passiveId: passive.id, targetIds: targets.map((target) => target.id) });
 
             for (const item of effect.effects) {
-                for (const target of item.type === 'status' && item.to === 'self' ? [unit] : targets) {
+                for (const target of receiversOf(item, unit, targets)) {
                     applyEffect(state, unit, target, item, events);
                 }
             }

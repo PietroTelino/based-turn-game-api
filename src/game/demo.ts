@@ -32,6 +32,7 @@ const STATUS_NAMES: Record<StatusKind, string> = {
     stealth: 'furtividade',
     counter: 'contra-ataque',
     form: 'transformação',
+    guard: 'proteção',
 };
 
 function describe(state: BattleState, event: BattleEvent): string | null {
@@ -102,6 +103,23 @@ function describe(state: BattleState, event: BattleEvent): string | null {
 
         case 'energy_gained':
             return `    o time ${event.team} recupera ${event.amount} de energia (agora tem ${event.energy})`;
+
+        case 'energy_lost':
+            return `    o time ${event.team} perde ${event.amount} de energia (agora tem ${event.energy})`;
+
+        case 'dispelled':
+            return `    ${label(event.targetId)} perde: ${event.statuses.map((status) => STATUS_NAMES[status]).join(', ')}`;
+
+        case 'chain_jump':
+            return `    o golpe salta de ${label(event.fromId)} para ${label(event.toId)}`;
+
+        case 'guarded':
+            return `    ${label(event.unitId)} protege ${label(event.protectedId)} e recebe o golpe`;
+
+        case 'revived': {
+            const unit = getUnit(state, event.unitId);
+            return `    ${label(event.unitId)} volta à batalha [${event.hp}/${unit.stats.maxHp}]`;
+        }
 
         case 'surrendered':
             return `\nO time ${event.team} desistiu.`;

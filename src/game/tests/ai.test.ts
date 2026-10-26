@@ -98,7 +98,7 @@ describe('catálogo de personagens', () => {
 
             if (effect.type === 'extra_action_on_transform' || effect.type === 'count_corpses' || effect.type === 'stealth_each_turn') {
                 // Sem número: a passiva só diz o que acontece (age de novo, conta os cadáveres, se esconde).
-            } else if (effect.type === 'energy_on_crit') {
+            } else if (effect.type === 'energy_on_crit' || effect.type === 'energy_when_empty') {
                 numbers.push(`${effect.amount} de energia`);
             } else if (effect.type === 'damage_per_enemy_status') {
                 // "N% a mais de dano para cada inimigo com o status."
@@ -110,7 +110,12 @@ describe('catálogo de personagens', () => {
                 numbers.push(percent(effect.power), `${effect.turns} turno`);
             } else if (effect.type === 'turn_start' || effect.type === 'battle_start') {
                 for (const item of effect.effects) {
-                    if (item.type === 'cleanse' || item.type === 'transform' || item.type === 'summon') continue;
+                    if (item.type === 'cleanse' || item.type === 'dispel' || item.type === 'transform' || item.type === 'summon' || item.type === 'revive') continue;
+
+                    if (item.type === 'energy') {
+                        numbers.push(`${item.amount} de energia`);
+                        continue;
+                    }
 
                     numbers.push(percent(item.power));
                     if (item.type === 'status') numbers.push(`${item.turns} turno`);
@@ -118,7 +123,7 @@ describe('catálogo de personagens', () => {
             } else {
                 numbers.push(percent(effect.amount));
 
-                if (effect.type === 'damage_per_drain' && effect.max !== undefined) {
+                if ((effect.type === 'damage_per_drain' || effect.type === 'damage_per_dispel') && effect.max !== undefined) {
                     numbers.push(`${effect.max} vezes`);
                 }
 
@@ -133,7 +138,7 @@ describe('catálogo de personagens', () => {
         }
     });
 
-    it('as invocações têm id que não é de personagem, e só cadáver é alvo de invocação', () => {
+    it('as invocações têm id que não é de personagem, e só cadáver é alvo de invocação (ou de quem revive)', () => {
         const characterIds = CHARACTERS.map((c) => c.id);
 
         for (const character of CHARACTERS) {
@@ -145,8 +150,9 @@ describe('catálogo de personagens', () => {
 
             for (const skill of character.skills) {
                 const summon = skill.effects.find((effect) => effect.type === 'summon');
+                const revive = skill.effects.some((effect) => effect.type === 'revive');
 
-                assert.equal(skill.target === 'corpse', summon !== undefined, skill.id);
+                assert.equal(skill.target === 'corpse', summon !== undefined || revive, skill.id);
 
                 if (summon?.type === 'summon') {
                     assert.ok(summonIds.includes(summon.summon), `${skill.id}: invocação ${summon.summon}`);

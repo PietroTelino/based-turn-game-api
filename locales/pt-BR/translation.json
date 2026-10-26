@@ -95,7 +95,8 @@
             "SKILL_NOT_FOUND": "Essa unidade não tem essa habilidade",
             "NOT_ENOUGH_ENERGY": "Energia insuficiente",
             "TARGET_REQUIRED": "Escolha um alvo",
-            "INVALID_TARGET": "Alvo inválido"
+            "INVALID_TARGET": "Alvo inválido",
+            "SKILL_USED_UP": "Essa habilidade já foi usada nesta batalha"
         }
     },
     "room": {

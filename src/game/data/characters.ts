@@ -945,6 +945,216 @@ export const CHARACTERS: CharacterDefinition[] = [
             },
         ],
     },
+    {
+        id: 'paladino',
+        name: 'Paladino',
+        role: 'tank',
+        stats: { maxHp: 1250, atk: 165, def: 80, speed: 92, critChance: 0.05, critDamage: 1.5 },
+        skills: [
+            {
+                id: 'paladino.golpe-radiante',
+                name: 'Golpe Radiante',
+                description: 'Golpeia um inimigo com a espada sagrada.',
+                energyCost: 0,
+                target: 'single-enemy',
+                element: 'light',
+                effects: [
+                    { type: 'damage', power: 1.0 },
+                ],
+            },
+            {
+                id: 'paladino.egide',
+                name: 'Égide',
+                description: 'Protege um aliado por 2 turnos: os golpes de alvo único contra ele vão para o Paladino, que ganha 30% de defesa nesse tempo.',
+                energyCost: 1,
+                target: 'single-ally',
+                element: 'light',
+                effects: [
+                    { type: 'status', status: 'guard', turns: 2, power: 0 },
+                    { type: 'status', status: 'def_up', turns: 2, power: 0.3, to: 'self' },
+                ],
+            },
+            {
+                id: 'paladino.ressurreicao',
+                name: 'Ressurreição',
+                description: 'Traz de volta um aliado caído com 40% da vida. Só pode ser usada uma vez por batalha.',
+                energyCost: 3,
+                target: 'corpse',
+                element: 'light',
+                uses: 1,
+                effects: [
+                    { type: 'revive', ratio: 0.4 },
+                ],
+            },
+        ],
+        passives: [
+            {
+                id: 'paladino.luz-protetora',
+                name: 'Luz Protetora',
+                description: 'No começo da vez do Paladino, o aliado com menos vida ganha um escudo igual a 80% do ataque dele por 2 turnos.',
+                element: 'light',
+                effect: { type: 'turn_start', target: 'lowest-ally', effects: [{ type: 'status', status: 'shield', turns: 2, power: 0.8 }] },
+            },
+        ],
+    },
+    {
+        id: 'inquisidora',
+        name: 'Inquisidora',
+        role: 'fighter',
+        stats: { maxHp: 900, atk: 215, def: 50, speed: 115, critChance: 0.12, critDamage: 1.5 },
+        skills: [
+            {
+                id: 'inquisidora.sentenca',
+                name: 'Sentença',
+                description: 'Golpeia um inimigo com a maça.',
+                energyCost: 0,
+                target: 'single-enemy',
+                element: 'physical',
+                effects: [
+                    { type: 'damage', power: 1.0 },
+                ],
+            },
+            {
+                id: 'inquisidora.julgamento',
+                name: 'Julgamento',
+                description: 'Tira de um inimigo todos os efeitos que o ajudam (escudo, bônus, provocação, esconderijo, proteção) e então o golpeia com força.',
+                energyCost: 1,
+                target: 'single-enemy',
+                element: 'light',
+                effects: [
+                    { type: 'dispel' },
+                    { type: 'damage', power: 1.6 },
+                ],
+            },
+            {
+                id: 'inquisidora.expurgo',
+                name: 'Expurgo',
+                description: 'Atinge todos os inimigos e tira deles escudo, provocação, esconderijo, proteção e contra-ataque.',
+                energyCost: 2,
+                target: 'all-enemies',
+                element: 'light',
+                effects: [
+                    { type: 'dispel', statuses: ['shield', 'taunt', 'stealth', 'guard', 'counter'] },
+                    { type: 'damage', power: 0.9 },
+                ],
+            },
+        ],
+        passives: [
+            {
+                id: 'inquisidora.zelo',
+                name: 'Zelo',
+                description: 'Cada efeito que a Inquisidora tira de um inimigo aumenta o dano dela em 8% até o fim da batalha (até 10 vezes).',
+                element: 'light',
+                effect: { type: 'damage_per_dispel', amount: 0.08, max: 10 },
+            },
+        ],
+    },
+    {
+        id: 'xama',
+        name: 'Xamã',
+        role: 'mage',
+        stats: { maxHp: 740, atk: 215, def: 35, speed: 110, critChance: 0.1, critDamage: 1.5 },
+        skills: [
+            {
+                id: 'xama.faisca',
+                name: 'Faísca',
+                description: 'Lança uma faísca em um inimigo.',
+                energyCost: 0,
+                target: 'single-enemy',
+                element: 'lightning',
+                ranged: true,
+                effects: [
+                    { type: 'damage', power: 1.0 },
+                ],
+            },
+            {
+                id: 'xama.corrente-eletrica',
+                name: 'Corrente Elétrica',
+                description: 'Um raio atinge um inimigo e salta para mais 2 inimigos sorteados, com 30% a menos de dano a cada salto.',
+                energyCost: 1,
+                target: 'single-enemy',
+                element: 'lightning',
+                ranged: true,
+                effects: [
+                    { type: 'damage', power: 1.4, bounces: 2, falloff: 0.3 },
+                ],
+            },
+            {
+                id: 'xama.tempestade',
+                name: 'Tempestade',
+                description: 'Raios caem sobre todos os inimigos, com 25% de chance de atordoar cada um.',
+                energyCost: 2,
+                target: 'all-enemies',
+                element: 'lightning',
+                effects: [
+                    { type: 'damage', power: 0.9 },
+                    { type: 'status', status: 'stun', turns: 1, power: 0, chance: 0.25 },
+                ],
+            },
+        ],
+        passives: [
+            {
+                id: 'xama.carga',
+                name: 'Carga',
+                description: 'Inimigos atordoados recebem 25% a mais de dano de todo o time do Xamã.',
+                element: 'lightning',
+                effect: { type: 'team_damage_bonus', amount: 0.25, when: { type: 'target_has_status', statuses: ['stun'] } },
+            },
+        ],
+    },
+    {
+        id: 'bardo',
+        name: 'Bardo',
+        role: 'support',
+        stats: { maxHp: 780, atk: 175, def: 40, speed: 130, critChance: 0.05, critDamage: 1.5 },
+        skills: [
+            {
+                id: 'bardo.acorde',
+                name: 'Acorde',
+                description: 'Um acorde afiado atinge um inimigo.',
+                energyCost: 0,
+                target: 'single-enemy',
+                element: 'sound',
+                ranged: true,
+                effects: [
+                    { type: 'damage', power: 0.9 },
+                ],
+            },
+            {
+                id: 'bardo.cancao-de-marcha',
+                name: 'Canção de Marcha',
+                description: 'Os aliados ficam 20% mais velozes por 2 turnos e o time recupera 2 de energia.',
+                energyCost: 1,
+                target: 'all-allies',
+                element: 'sound',
+                effects: [
+                    { type: 'status', status: 'speed_up', turns: 2, power: 0.2 },
+                    { type: 'energy', amount: 2, team: 'own' },
+                ],
+            },
+            {
+                id: 'bardo.dissonancia',
+                name: 'Dissonância',
+                description: 'Atinge todos os inimigos e o time deles perde 2 de energia neste turno.',
+                energyCost: 2,
+                target: 'all-enemies',
+                element: 'sound',
+                effects: [
+                    { type: 'damage', power: 0.75 },
+                    { type: 'energy', amount: 2, team: 'enemy' },
+                ],
+            },
+        ],
+        passives: [
+            {
+                id: 'bardo.refrao',
+                name: 'Refrão',
+                description: 'No começo da vez do Bardo, se o time estiver sem energia, recupera 2 de energia.',
+                element: 'sound',
+                effect: { type: 'energy_when_empty', amount: 2 },
+            },
+        ],
+    },
 ];
 
 export function getCharacter(id: string): CharacterDefinition {

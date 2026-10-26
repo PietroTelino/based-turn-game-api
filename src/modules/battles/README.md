@@ -132,6 +132,7 @@ vence e `state.surrenderedBy` guarda o time de quem desistiu; os eventos são
 - `availableActions` são os botões da unidade da vez: cada habilidade, se pode
   ser usada agora e em quem.
 - Cada item de `availableActions` traz também `preview: { damage, heal }`: o dano base e a cura base da habilidade para quem está na vez agora (ATK atual x poder, com a fúria, sem a defesa do alvo e sem crítico). `null` quando a habilidade não causa dano ou não cura. É o número que a tela mostra junto da descrição.
+- `targets` traz, para cada alvo possível, o que a habilidade faria nele agora (`damage`, `critDamage`, `critChance`, `absorbed`, `heal`, `defeats` e, se o alvo está protegido, `guardedBy`): é o número que aparece em cima do alvo ao parar o mouse. `usesLeft` é quantos usos restam numa habilidade com limite por batalha (`null` sem limite).
 
 Contra a IA, depois da jogada do jogador a IA joga sozinha até a vez voltar
 para ele, então uma única resposta pode trazer várias jogadas (e até a virada

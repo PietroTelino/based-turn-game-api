@@ -95,7 +95,8 @@
             "SKILL_NOT_FOUND": "That unit does not have that skill",
             "NOT_ENOUGH_ENERGY": "Not enough energy",
             "TARGET_REQUIRED": "Choose a target",
-            "INVALID_TARGET": "Invalid target"
+            "INVALID_TARGET": "Invalid target",
+            "SKILL_USED_UP": "This skill was already used in this battle"
         }
     },
     "room": {

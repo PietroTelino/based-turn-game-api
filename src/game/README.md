@@ -49,7 +49,7 @@ A **energia** segue o turno: quando um turno começa, os dois times recebem a en
 | Habilidades | A primeira é o ataque básico (custo 0). As outras gastam energia. | `data/characters.ts` |
 | Dano | `ATK x poder x 100 / (100 + DEF)`, vezes o multiplicador de crítico. | `calculateDamage` |
 | Dano base | `ATK x poder` (com a fúria e as passivas que valem em todo golpe), sem a defesa do alvo, sem crítico e sem as passivas que dependem do alvo. É o número mostrado na descrição da habilidade durante a batalha, junto com a cura base. | `calculateBaseDamage`, `previewSkill` |
-| Prévia no alvo | O dano (ou a cura) que a habilidade faria em cada alvo possível, mostrado em cima dele na tela. A habilidade é feita numa cópia do campo, uma vez sem crítico e outra com todos os golpes críticos; status com chance ficam de fora. Conta a defesa, o escudo, a execução, as passivas que dependem do alvo e o que um efeito muda no seguinte. Vem em `targets` de cada ação disponível. | `previewTargets`, `simulateSkill` |
+| Prévia no alvo | O dano (ou a cura) que a habilidade faria em cada alvo possível, mostrado em cima dele na tela. A habilidade é feita numa cópia do campo, uma vez sem crítico e outra com todos os golpes críticos; status com chance ficam de fora. Conta a defesa, o escudo, a execução, as passivas que dependem do alvo e o que um efeito muda no seguinte. Num alvo protegido (`guard`), a conta é feita no protetor, que vem em `guardedBy`. Vem em `targets` de cada ação disponível; a IA pede as ações sem ela (`previews: false`), porque não usa. | `previewTargets`, `simulateSkill` |
 | Cura | `ATK x poder`, sem passar da vida máxima. | `calculateHeal` |
 | Roubo de vida | Um efeito de dano com `drain` cura quem bateu numa fração da vida que o alvo perdeu (o que o escudo segurou não conta). Ex.: `{ type: 'damage', power: 1.5, drain: 0.5 }`. | `applyEffect` |
 | Golpe de execução | Um efeito de dano com `perTargetMissingHp` bate mais forte em alvo ferido: para cada 1% da vida máxima que o alvo já perdeu, essa porcentagem a mais de dano (pontos inteiros; soma com os bônus das passivas). Ex.: `{ type: 'damage', power: 2.3, perTargetMissingHp: 1 }`, o Golpe Fatal do Ladino. Não entra no dano base da prévia, que não conhece o alvo. | `applyEffect`, `getMissingHpPercent` |
@@ -81,6 +81,7 @@ Uma habilidade aplica um status com um efeito do tipo `status`:
 | `stealth` | Furtividade: os inimigos não podem escolher a unidade como alvo de uma habilidade de alvo único (a não ser que todos os inimigos vivos estejam escondidos). Golpes em área e passivas que escolhem o alvo sozinhas acertam normalmente. Acaba quando ela age (antes do golpe), leva dano de qualquer tipo ou perde a vez. Quem aplica é a passiva `stealth_each_turn`, no começo de cada turno. A purificação não tira. | não usa (0) |
 | `counter` | Contra-ataque: enquanto a unidade o carrega, todo golpe que ela leva de um inimigo é revidado com o ataque básico dela (a primeira habilidade), fora da vez e sem gastar energia. Vale para golpe de habilidade, em um alvo ou em área, e para o de uma passiva que bate sozinha; dano de status (veneno, queimadura, sangramento) não conta. Um revide por golpe recebido, mesmo que a habilidade bata várias vezes; atordoada ou derrotada pelo golpe, a unidade não revida; um revide não provoca outro. O revide vai em quem bateu, a não ser que um inimigo esteja provocando: aí vai em quem provoca, como qualquer ataque básico. O motor emite `counter_attack` e, em seguida, os eventos do golpe. A purificação não tira. É a Postura de Duelo do Espadachim. | não usa (0) |
 | `form` | A unidade está transformada (veja "Formas"). Quando acaba, ela volta à forma original. Não é aplicado como os outros: quem o cria é o efeito `transform`. | não usa (0) |
+| `guard` | Proteção: os golpes de alvo único dos inimigos que mirarem na unidade vão para quem aplicou o status (`sourceId`), enquanto ele estiver vivo. O motor troca o alvo antes do golpe: `skill_used` já traz o protetor, e `guarded` vem logo depois. Golpes em área não mudam. Ninguém protege a si mesmo (a habilidade não oferece a própria unidade como alvo). É a Égide do Paladino. | não usa (0) |
 | `passive_up` | A passiva de começo de vez de quem o carrega cura e causa dano mais forte. É o que a Bênção dá ao Sacerdote: a Aura Restauradora cura 80% a mais nas duas vezes seguintes. | fração a mais (0.8 = 80%) |
 
 Purificação: o efeito `{ type: 'cleanse' }` tira do alvo todos os status
@@ -89,6 +90,14 @@ penalidades de atributo) e deixa bônus e escudo. Um aliado atordoado que é
 purificado antes da própria vez não a perde, e um veneno que crescia recomeça
 do normal se for aplicado de novo. Está no Toque Curativo do Sacerdote e no
 Abraço da Floresta da Dríade, antes da cura.
+
+Tirar efeitos: o efeito `{ type: 'dispel' }` faz o contrário da
+purificação: tira do alvo os status que o ajudam (`POSITIVE_STATUSES`:
+escudo, bônus de atributo, `passive_up`, provocação, esconderijo,
+contra-ataque e proteção). A transformação fica. Com
+`statuses: ['shield', ...]`, tira só esses. O motor emite `dispelled` com o
+que saiu e `statuses_changed`. Está no Julgamento e no Expurgo da
+Inquisidora, antes do golpe (então o escudo tirado não segura o golpe).
 
 Regras de duração:
 
@@ -127,7 +136,10 @@ mostrada na carta e no painel da batalha. O campo `effect` diz o que ela faz:
 | `stealth_each_turn` | No começo de cada turno a unidade fica escondida (status `stealth`) até agir ou levar dano. O motor só emite `statuses_changed`: a tela mostra a figura quase transparente. | Ladino |
 | `count_corpses` | Conta os cadáveres do time: aliados derrotados que ainda não foram erguidos. O número fica em `unit.passiveStacks` e o motor avisa quando ele muda (`passive_triggered` com `stacks`). É só a conta: quem usa os cadáveres é o efeito `summon`. | Necromante |
 | `battle_start` | Age sozinha uma vez só, quando a batalha começa: no turno 1, antes da vez de qualquer unidade, aplica `effects` em todos os inimigos vivos (`target: 'all-enemies'`). O motor emite `passive_triggered` com os alvos e depois os eventos dos efeitos. Quem está escondido também é atingido (não é golpe de alvo único), e uma unidade que entra depois (invocação) não dispara a passiva de novo. | Guardião |
-| `turn_start` | Age sozinha no começo da vez da unidade, se ela não estiver atordoada: aplica `effects` em `target`, como uma habilidade sem custo. `all-allies` (se só cura, pula quem está com a vida cheia) ou `fastest-enemy`. | Sacerdote, Dríade |
+| `turn_start` | Age sozinha no começo da vez da unidade, se ela não estiver atordoada: aplica `effects` em `target`, como uma habilidade sem custo. `all-allies` (se só cura, pula quem está com a vida cheia), `fastest-enemy` ou `lowest-ally` (o aliado vivo com a menor fração da vida, a própria unidade inclusive). | Sacerdote, Dríade, Paladino |
+| `damage_per_dispel` | Como `damage_per_drain`, mas a carga vem de tirar efeitos: uma por status que a unidade tira de um inimigo (efeito `dispel`), até `max`. As cargas já valem para o golpe seguinte, mesmo dentro da mesma habilidade. | Inquisidora |
+| `team_damage_bonus` | Vale para os golpes de todo o time, não só os da unidade, enquanto ela estiver viva: +`amount` de dano nos alvos que cumprem `when`. Quando faz diferença, é anunciada em nome de quem tem a passiva. | Xamã |
+| `energy_when_empty` | No começo da vez da unidade (se não estiver atordoada), se o time está sem energia, recupera `amount` (`passive_triggered` e `energy_gained`). | Bardo |
 
 Uma passiva pode fazer mais de uma coisa: o efeito principal fica em `effect`
 e os outros em `also` (a do Arqueiro soma dano com condição e redução de
@@ -146,7 +158,8 @@ diferença: antes do dano que uma passiva com condição mudou (uma vez por
 ação) e antes dos efeitos de uma passiva de começo de vez. As que valem em
 todo golpe não avisam. Numa passiva que acumula cargas, o aviso vem uma vez
 por ação, depois dos golpes, com `stacks` (quantas cargas ela tem agora).
-`energy_gained` avisa que a energia de um time subiu no meio do turno.
+`energy_gained` avisa que a energia de um time subiu no meio do turno, e
+`energy_lost` que a de um time caiu por causa do outro.
 
 A sequência de números aleatórios não depende das passivas: cada golpe gasta
 um sorteio de crítico, com ou sem bônus. Uma batalha gravada antes de as
@@ -218,9 +231,33 @@ batalha. Hoje só o Necromante tem, com o **Guerreiro Esqueleto**.
   pela antiga.
 - A IA ergue sempre que há cadáver e energia.
 
+## Energia, ressurreição e golpes que saltam
+
+- **Energia**: o efeito `{ type: 'energy', amount: 2, team: 'own' }` dá energia
+  ao time de quem usa (até o máximo de 10, `energy_gained`); com
+  `team: 'enemy'`, tira do time adversário até zerar (`energy_lost`). Vale uma
+  vez por ação, mesmo numa habilidade em área. Como a energia recomeça a cada
+  turno, a que o inimigo perde só faz falta a quem dele ainda vai agir.
+  Canção de Marcha e Dissonância, do Bardo.
+- **Ressurreição**: o efeito `{ type: 'revive', ratio: 0.4 }`, numa habilidade
+  de alvo `corpse`, traz de volta o primeiro aliado caído do time como ele
+  era, com essa fração da vida máxima e sem status (quem estava transformado
+  volta na forma original). Como a invocação, ele entra na fila de quem ainda
+  vai agir neste turno. O motor emite `revived` e `order_changed`.
+- **Limite de usos**: `uses` numa habilidade diz quantas vezes a unidade pode
+  usá-la na batalha (a Ressurreição: 1). A conta fica em `unit.skillUses`;
+  `getAvailableActions` devolve `usesLeft` e marca a habilidade como não
+  utilizável quando zera, e `applyAction` recusa com `SKILL_USED_UP`.
+- **Golpe que salta**: um efeito de dano com `bounces` e `falloff`
+  (`{ type: 'damage', power: 1.4, bounces: 2, falloff: 0.3 }`) acerta o alvo e
+  salta para essa quantidade de outros inimigos vivos, sorteados entre os que
+  ele ainda não atingiu, cada salto com `falloff` a menos que o anterior.
+  Antes de cada salto vem `chain_jump`. É a Corrente Elétrica do Xamã. A
+  prévia no alvo conta só o alvo escolhido: os saltos dependem de sorte.
+
 ## Elemento das habilidades
 
-Cada habilidade do catálogo tem um `element` (`physical`, `fire`, `ice`, `lightning`, `nature`, `light` ou `shadow`) e pode ter `ranged: true`. Os dois campos **não entram em nenhuma conta**: existem para a tela escolher o efeito visual e o som. `ranged` só vale em golpe contra inimigos: num alvo só, a tela mostra um projétil em vez de a unidade avançar; em área, uma chuva de projéteis. Se um dia houver fraqueza por elemento, o dado já está aqui.
+Cada habilidade do catálogo tem um `element` (`physical`, `fire`, `ice`, `lightning`, `nature`, `light`, `shadow` ou `sound`) e pode ter `ranged: true`. Os dois campos **não entram em nenhuma conta**: existem para a tela escolher o efeito visual e o som. `ranged` só vale em golpe contra inimigos: num alvo só, a tela mostra um projétil em vez de a unidade avançar; em área, uma chuva de projéteis. Se um dia houver fraqueza por elemento, o dado já está aqui.
 
 ## Arquivos
 

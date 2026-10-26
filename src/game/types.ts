@@ -54,6 +54,9 @@ export type TargetType = 'single-enemy' | 'all-enemies' | 'single-ally' | 'all-a
  *   sozinhas acertam normalmente. Acaba quando ela age ou leva dano.
  * - form: a unidade está transformada (ver FormDefinition). Quando o status
  *   acaba, ela volta à forma original.
+ * - guard: a unidade está protegida por quem aplicou o status (`sourceId`).
+ *   Os golpes de alvo único dos inimigos que mirarem nela vão para o protetor,
+ *   enquanto ele estiver vivo. Golpes em área não mudam.
  */
 export type StatusKind =
     | 'stun'
@@ -72,7 +75,8 @@ export type StatusKind =
     | 'heal_down'
     | 'stealth'
     | 'counter'
-    | 'form';
+    | 'form'
+    | 'guard';
 
 /** Um status ativo em uma unidade. */
 export interface StatusEffect {
@@ -138,20 +142,41 @@ export interface StatusEffect {
  * unidade derrotada dá lugar a uma unidade nova, com vida cheia, no mesmo
  * lugar do time. Ela entra na fila de ação do turno em que é erguida e não
  * deixa cadáver.
+ *
+ * O efeito 'revive' traz de volta o aliado caído (alvo 'corpse') como ele era,
+ * com `ratio` da vida máxima e sem nenhum status. Como a invocação, ele entra
+ * na fila de ação do turno em que volta.
+ *
+ * O efeito 'dispel' tira do alvo os status que o ajudam (POSITIVE_STATUSES,
+ * em engine.ts): escudo, bônus, provocação, esconderijo, postura, proteção.
+ * Com `statuses`, tira só esses.
+ *
+ * O efeito 'energy' mexe na energia de um time, uma vez por ação (não uma por
+ * alvo): `team: 'own'` dá energia ao time de quem usou, até o máximo do jogo;
+ * `'enemy'` tira do time adversário, até zerar. Como a energia recomeça a cada
+ * turno, a que o inimigo perde só faz falta a quem dele ainda vai agir.
+ *
+ * No efeito 'damage', `bounces` faz o golpe saltar, depois do alvo, para essa
+ * quantidade de outros inimigos vivos, sorteados entre os que ainda não foram
+ * atingidos por ele; cada salto causa `falloff` a menos que o anterior (0.3 =
+ * 30% a menos). Os saltos dependem de sorte: a prévia no alvo não os conta.
  */
 export type SkillEffect =
-    | { type: 'damage'; power: number; drain?: number; perTargetMissingHp?: number }
+    | { type: 'damage'; power: number; drain?: number; perTargetMissingHp?: number; bounces?: number; falloff?: number }
     | { type: 'heal'; power: number }
     | { type: 'status'; status: StatusKind; turns: number; power: number; chance?: number; to?: 'target' | 'self' }
     | { type: 'cleanse' }
+    | { type: 'dispel'; statuses?: StatusKind[] }
+    | { type: 'energy'; amount: number; team: 'own' | 'enemy' }
     | { type: 'transform'; form: string; turns: number }
-    | { type: 'summon'; summon: string };
+    | { type: 'summon'; summon: string }
+    | { type: 'revive'; ratio: number };
 
 /**
  * Elemento de uma habilidade. Por enquanto não entra em nenhuma conta: serve
  * para a tela escolher o efeito visual e o som. Sem elemento, vale 'physical'.
  */
-export type SkillElement = 'physical' | 'fire' | 'ice' | 'lightning' | 'nature' | 'light' | 'shadow';
+export type SkillElement = 'physical' | 'fire' | 'ice' | 'lightning' | 'nature' | 'light' | 'shadow' | 'sound';
 
 export interface SkillDefinition {
     id: string;
@@ -162,6 +187,11 @@ export interface SkillDefinition {
     target: TargetType;
     effects: SkillEffect[];
     element?: SkillElement;
+    /**
+     * Quantas vezes a unidade pode usar a habilidade na batalha inteira. Sem
+     * o campo, não há limite. A conta fica em `BattleUnit.skillUses`.
+     */
+    uses?: number;
     /**
      * Golpe à distância. Em alvo único, a tela mostra um projétil em vez de a
      * unidade avançar; em área, uma chuva de projéteis em vez do efeito do
@@ -244,7 +274,20 @@ export type PassiveCondition =
  *
  * turn_start é a passiva que age sozinha: no começo da vez da unidade (se ela
  * não estiver atordoada), os `effects` são aplicados no alvo indicado, como
- * se fossem uma habilidade sem custo.
+ * se fossem uma habilidade sem custo. 'lowest-ally' é o aliado vivo com a
+ * menor fração da vida (a própria unidade pode ser ele).
+ *
+ * damage_per_dispel: a passiva acumula uma carga para cada status que a
+ * unidade tira de um inimigo (efeito 'dispel'), até `max`, e cada carga soma
+ * `amount` ao dano dos golpes dela até o fim da batalha. As cargas ficam em
+ * `unit.passiveStacks`, como em damage_per_drain.
+ *
+ * team_damage_bonus: vale para os golpes de todo o time da unidade, não só os
+ * dela (enquanto ela estiver viva): +`amount` de dano nos alvos que cumprem
+ * `when`.
+ *
+ * energy_when_empty: no começo da vez da unidade (se ela não estiver
+ * atordoada), se o time dela está sem energia, recupera `amount`.
  */
 export type PassiveEffect =
     | { type: 'damage_bonus'; amount: number; when?: PassiveCondition }
@@ -263,7 +306,10 @@ export type PassiveEffect =
     | { type: 'count_corpses' }
     | { type: 'stealth_each_turn' }
     | { type: 'battle_start'; target: 'all-enemies'; effects: SkillEffect[] }
-    | { type: 'turn_start'; target: 'all-allies' | 'fastest-enemy'; effects: SkillEffect[] };
+    | { type: 'turn_start'; target: 'all-allies' | 'fastest-enemy' | 'lowest-ally'; effects: SkillEffect[] }
+    | { type: 'damage_per_dispel'; amount: number; max?: number }
+    | { type: 'team_damage_bonus'; amount: number; when: PassiveCondition }
+    | { type: 'energy_when_empty'; amount: number };
 
 export interface PassiveDefinition {
     /** "<personagem>.<passiva>", como nas habilidades. */
@@ -347,6 +393,8 @@ export interface BattleUnit {
     summons?: FormDefinition[];
     /** A unidade foi invocada (um esqueleto erguido). Quando cai, não deixa cadáver. */
     summoned?: boolean;
+    /** Quantas vezes a unidade já usou cada habilidade que tem limite de usos (SkillDefinition.uses), pelo id. */
+    skillUses?: Record<string, number>;
     /**
      * Só em quem se transforma. `form` é o id da forma em que a unidade está
      * agora (ausente = forma original). Enquanto transformada, `stats`,
@@ -500,6 +548,20 @@ export type BattleEvent =
     | { type: 'passive_triggered'; unitId: string; passiveId: string; targetIds: string[]; stacks?: number }
     /** O time recuperou energia no meio do turno, por causa de `unitId`. `energy` é quanto ele tem agora. */
     | { type: 'energy_gained'; team: TeamId; unitId: string; amount: number; energy: number }
+    /** O time `team` perdeu energia por causa de `unitId` (de outro time). `energy` é quanto ele tem agora. */
+    | { type: 'energy_lost'; team: TeamId; unitId: string; amount: number; energy: number }
+    /** `sourceId` tirou de `targetId` os status que o ajudavam. Vem seguido de statuses_changed. */
+    | { type: 'dispelled'; sourceId: string; targetId: string; statuses: StatusKind[] }
+    /** O golpe de `sourceId` saltou de `fromId` para `toId`. Os eventos do golpe vêm logo depois. */
+    | { type: 'chain_jump'; sourceId: string; fromId: string; toId: string }
+    /**
+     * O golpe de alvo único que mirava em `protectedId` foi para `unitId`, que o
+     * protege (status guard). Vem logo depois de skill_used, que já traz o
+     * protetor como alvo.
+     */
+    | { type: 'guarded'; unitId: string; protectedId: string }
+    /** `sourceId` trouxe de volta o aliado caído `unitId`, com `hp` de vida. */
+    | { type: 'revived'; sourceId: string; unitId: string; hp: number }
     /** Um time desistiu. Vem sempre seguido de battle_ended. */
     | { type: 'surrendered'; team: TeamId }
     | { type: 'battle_ended'; winner: TeamId };
@@ -546,6 +608,11 @@ export interface TargetPreview {
     heal: number | null;
     /** O golpe sem crítico já derruba o alvo. */
     defeats: boolean;
+    /**
+     * O alvo está protegido (status guard): o golpe vai para este protetor, e
+     * os números acima são os do golpe nele.
+     */
+    guardedBy?: string;
 }
 
 /** Uma opção que a unidade da vez tem. Serve para a IA e para os botões do front. */
@@ -554,6 +621,8 @@ export interface AvailableAction {
     preview: SkillPreview;
     /** A prévia em cada alvo de `targetIds` (vazia quando a habilidade não causa dano nem cura). */
     targets: TargetPreview[];
+    /** Quantos usos ainda restam na batalha, nas habilidades com limite (`uses`). `null` sem limite. */
+    usesLeft: number | null;
     /** false quando falta energia ou não há alvo possível. */
     usable: boolean;
     /** true quando o jogador precisa escolher um dos targetIds. */
