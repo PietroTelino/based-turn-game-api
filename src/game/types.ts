@@ -524,10 +524,36 @@ export interface SkillPreview {
     heal: number | null;
 }
 
+/**
+ * O que a habilidade faria num alvo específico se fosse usada agora: é o
+ * número que a tela mostra em cima de cada alvo possível. Ao contrário de
+ * `SkillPreview`, já conta a defesa, o escudo e a vida do alvo, as passivas
+ * que dependem dele e os status garantidos que a própria habilidade aplica
+ * antes de um golpe. Não conta o acaso: nenhum golpe é crítico em `damage`,
+ * e status com chance (como atordoar) não entram.
+ */
+export interface TargetPreview {
+    unitId: string;
+    /** Dano total no alvo, sem crítico (antes do escudo). `null` quando a habilidade não causa dano. */
+    damage: number | null;
+    /** O mesmo dano se todos os golpes forem críticos. `null` sem dano. */
+    critDamage: number | null;
+    /** Chance de cada golpe ser crítico, de 0 a 1 (0 sem dano). */
+    critChance: number;
+    /** Quanto do dano o escudo do alvo segura. */
+    absorbed: number;
+    /** Cura que o alvo recebe de fato (limitada à vida que falta). `null` quando a habilidade não cura. */
+    heal: number | null;
+    /** O golpe sem crítico já derruba o alvo. */
+    defeats: boolean;
+}
+
 /** Uma opção que a unidade da vez tem. Serve para a IA e para os botões do front. */
 export interface AvailableAction {
     skill: SkillDefinition;
     preview: SkillPreview;
+    /** A prévia em cada alvo de `targetIds` (vazia quando a habilidade não causa dano nem cura). */
+    targets: TargetPreview[];
     /** false quando falta energia ou não há alvo possível. */
     usable: boolean;
     /** true quando o jogador precisa escolher um dos targetIds. */

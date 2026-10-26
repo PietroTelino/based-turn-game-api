@@ -10,3 +10,4 @@ import './statuses.test';
 import './counter.test';
 import './passives.test';
 import './ai.test';
+import './target-preview.test';

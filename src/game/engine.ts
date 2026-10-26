@@ -27,6 +27,7 @@ import type {
     Stats,
     StatusEffect,
     StatusKind,
+    TargetPreview,
     TeamId,
 } from './types';
 
@@ -451,12 +452,14 @@ export function getAvailableActions(state: BattleState): AvailableAction[] {
     }
 
     return actor.skills.map((skill) => {
-        const targetIds = getCandidateTargets(state, actor, skill).map((u) => u.id);
+        const candidates = getCandidateTargets(state, actor, skill);
+        const targetIds = candidates.map((u) => u.id);
         const hasEnergy = state.energy[actor.team] >= skill.energyCost;
 
         return {
             skill,
             preview: previewSkill(state, actor, skill),
+            targets: previewTargets(state, actor, skill, candidates),
             usable: hasEnergy && targetIds.length > 0,
             requiresTarget: requiresTarget(skill),
             targetIds,
@@ -485,6 +488,89 @@ export function previewSkill(state: BattleState, actor: BattleUnit, skill: Skill
     }
 
     return { damage, heal };
+}
+
+/**
+ * A prévia da habilidade em cada um dos `targets` (veja TargetPreview). Só
+ * para as que causam dano ou curam; as outras devolvem uma lista vazia.
+ *
+ * A habilidade é feita de verdade numa cópia do campo (simulateSkill), uma
+ * vez sem nenhum crítico e outra com todos, e a prévia sai do que aconteceu
+ * nela. Assim entra tudo o que muda um golpe no meio da ação: o status que
+ * ela aplica antes, o escudo que um golpe gasta, a vida que o anterior tirou,
+ * as cargas que o roubo de vida dá a cada alvo de um golpe em área. Com alvo
+ * único, cada alvo possível é uma cópia separada; em área, uma só para todos.
+ */
+export function previewTargets(state: BattleState, actor: BattleUnit, skill: SkillDefinition, targets: BattleUnit[]): TargetPreview[] {
+    const hasDamage = skill.effects.some((effect) => effect.type === 'damage');
+    const hasHeal = skill.effects.some((effect) => effect.type === 'heal');
+
+    if (!hasDamage && !hasHeal) {
+        return [];
+    }
+
+    const groups = requiresTarget(skill) ? targets.map((target) => [target.id]) : [targets.map((target) => target.id)];
+    const previews: TargetPreview[] = [];
+
+    for (const ids of groups) {
+        const plain = simulateSkill(state, actor.id, skill, ids, false);
+        const crit = simulateSkill(state, actor.id, skill, ids, true);
+
+        for (const id of ids) {
+            const hits = (events: BattleEvent[]) =>
+                events.filter((event): event is Extract<BattleEvent, { type: 'damage' }> => event.type === 'damage' && event.sourceId === actor.id && event.targetId === id);
+            const heals = plain.events.filter((event) => event.type === 'heal' && event.sourceId === actor.id && event.targetId === id);
+            const target = getUnit(state, id);
+
+            previews.push({
+                unitId: id,
+                damage: hasDamage ? hits(plain.events).reduce((sum, hit) => sum + hit.amount, 0) : null,
+                critDamage: hasDamage ? hits(crit.events).reduce((sum, hit) => sum + hit.amount, 0) : null,
+                critChance: hasDamage ? Math.min(1, actor.stats.critChance + getHitModifiers(state, actor, target).critChanceBonus) : 0,
+                absorbed: hits(plain.events).reduce((sum, hit) => sum + hit.absorbed, 0),
+                heal: hasHeal ? heals.reduce((sum, heal) => sum + (heal.type === 'heal' ? heal.amount : 0), 0) : null,
+                defeats: hasDamage && !isAlive(getUnit(plain.state, id)),
+            });
+        }
+    }
+
+    return previews;
+}
+
+/**
+ * Na prévia, o que os sorteios de applyEffect respondem: `null` fora dela
+ * (sorteio de verdade); `true` ou `false` para todo golpe ser crítico ou
+ * nenhum. Na prévia, status com chance nunca acontecem.
+ */
+let previewCrits: boolean | null = null;
+
+/**
+ * Faz os efeitos da habilidade, na ordem, numa cópia do campo, como
+ * applyAction faria (sem o custo, sem contra-ataques e sem passar a vez). A
+ * cópia é descartada: nada muda na batalha, nem o sorteio dela.
+ */
+function simulateSkill(state: BattleState, actorId: string, skill: SkillDefinition, targetIds: string[], crits: boolean): BattleResult {
+    const sim = structuredClone(state);
+    const self = getUnit(sim, actorId);
+    const targets = targetIds.map((id) => getUnit(sim, id));
+    const events: BattleEvent[] = [];
+
+    previewCrits = crits;
+
+    try {
+        for (const effect of skill.effects) {
+            const receivers = effect.type === 'status' && effect.to === 'self' ? [self] : targets;
+            const fieldBonus = getEnemyStatusBonus(sim, self);
+
+            for (const receiver of receivers) {
+                applyEffect(sim, self, receiver, effect, events, fieldBonus);
+            }
+        }
+    } finally {
+        previewCrits = null;
+    }
+
+    return { state: sim, events };
 }
 
 // ---------------------------------------------------------------------------
@@ -780,7 +866,7 @@ function applyEffect(
 
             // Sempre um sorteio por golpe, com ou sem passiva: a sequência de
             // números aleatórios da batalha não depende de quem tem o quê.
-            const critical = rollChance(state, actor.stats.critChance + modifiers.critChanceBonus);
+            const critical = previewCrits ?? rollChance(state, actor.stats.critChance + modifiers.critChanceBonus);
             const defender = getEffectiveStats(target);
             // Golpe de execução: quanto mais vida o alvo já perdeu, mais forte.
             const executeBonus = ((effect.perTargetMissingHp ?? 0) * getMissingHpPercent(target)) / 100;
@@ -870,7 +956,8 @@ function applyEffect(
         case 'status': {
             // Só sorteia quando a habilidade tem chance: efeitos garantidos
             // não gastam números aleatórios.
-            if (effect.chance !== undefined && !rollChance(state, effect.chance)) {
+            // Na prévia (previewCrits), o que depende de sorte fica de fora.
+            if (effect.chance !== undefined && (previewCrits !== null || !rollChance(state, effect.chance))) {
                 return;
             }
 
