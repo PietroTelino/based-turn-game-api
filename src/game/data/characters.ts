@@ -1204,6 +1204,58 @@ export const CHARACTERS: CharacterDefinition[] = [
             },
         ],
     },
+    {
+        id: 'harpia',
+        name: 'Harpia',
+        role: 'assassin',
+        stats: { maxHp: 760, atk: 210, def: 35, speed: 135, critChance: 0.15, critDamage: 1.5 },
+        skills: [
+            {
+                id: 'harpia.garras',
+                name: 'Garras',
+                description: 'Rasga um inimigo com as garras.',
+                energyCost: 0,
+                target: 'single-enemy',
+                element: 'physical',
+                effects: [
+                    { type: 'damage', power: 1.0 },
+                ],
+            },
+            {
+                id: 'harpia.rasante',
+                name: 'Rasante',
+                description: 'Mergulha sobre um inimigo e o dilacera com as garras, causando sangramento de 30% do ataque por 2 turnos.',
+                energyCost: 1,
+                target: 'single-enemy',
+                element: 'physical',
+                effects: [
+                    { type: 'damage', power: 1.5 },
+                    { type: 'status', status: 'bleed', turns: 2, power: 0.3 },
+                ],
+            },
+            {
+                id: 'harpia.grito-estridente',
+                name: 'Grito Estridente',
+                description: 'Um grito agudo atinge todos os inimigos e os deixa 20% mais lentos por 2 turnos.',
+                energyCost: 2,
+                target: 'all-enemies',
+                element: 'sound',
+                effects: [
+                    { type: 'damage', power: 0.75 },
+                    { type: 'status', status: 'speed_down', turns: 2, power: 0.2 },
+                ],
+            },
+        ],
+        passives: [
+            {
+                id: 'harpia.predadora',
+                name: 'Predadora',
+                description: 'Os golpes da Harpia causam 30% a mais de dano em inimigos com menos de 50% da vida.',
+                element: 'physical',
+                effect: { type: 'damage_bonus', amount: 0.3, when: { type: 'target_hp_below', ratio: 0.5 } },
+            },
+        ],
+    },
 ];
 
 export function getCharacter(id: string): CharacterDefinition {
