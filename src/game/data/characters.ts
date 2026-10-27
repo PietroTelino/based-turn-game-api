@@ -1155,6 +1155,55 @@ export const CHARACTERS: CharacterDefinition[] = [
             },
         ],
     },
+    {
+        id: 'sucubo',
+        name: 'Súcubo',
+        role: 'mage',
+        stats: { maxHp: 820, atk: 220, def: 40, speed: 118, critChance: 0.1, critDamage: 1.5 },
+        skills: [
+            {
+                id: 'sucubo.acoite',
+                name: 'Açoite',
+                description: 'Chicoteia um inimigo com a cauda. Causa 30% a mais de dano em quem carrega a Maldição da Súcubo.',
+                energyCost: 0,
+                target: 'single-enemy',
+                element: 'shadow',
+                effects: [
+                    { type: 'damage', power: 1.0 },
+                ],
+            },
+            {
+                id: 'sucubo.tormento',
+                name: 'Tormento',
+                description: 'Uma onda de agonia atinge todos os inimigos. Causa 30% a mais de dano em quem carrega a Maldição da Súcubo.',
+                energyCost: 2,
+                target: 'all-enemies',
+                element: 'shadow',
+                effects: [
+                    { type: 'damage', power: 1.0 },
+                ],
+            },
+        ],
+        passives: [
+            {
+                id: 'sucubo.maldicao',
+                name: 'Maldição',
+                description:
+                    'Inimigos amaldiçoados pela Súcubo levam, no começo de cada vez, dano igual a 40% do ataque dela, e as habilidades de alvo único deles não podem mirar nela enquanto houver outro alvo (golpes em área a atingem normalmente). Os golpes dela causam 30% a mais neles.',
+                element: 'shadow',
+                effect: { type: 'damage_bonus', amount: 0.3, when: { type: 'target_has_status', statuses: ['curse'], fromSelf: true } },
+            },
+            {
+                id: 'sucubo.torpor',
+                name: 'Torpor',
+                description:
+                    'Quando a batalha começa, todos os inimigos recebem Torpor por 3 turnos (a purificação tira). Quem ainda tiver o Torpor quando ele acabar adormece. Quando a Súcubo golpeia um inimigo adormecido, ele recebe a Maldição para sempre (dano por vez de 40% do ataque dela; a purificação não tira).',
+                element: 'shadow',
+                effect: { type: 'battle_start', target: 'all-enemies', effects: [{ type: 'status', status: 'drowsy', turns: 3, power: 0 }] },
+                also: [{ type: 'status_on_hit', status: 'curse', turns: 1, power: 0.4, permanent: true, when: { type: 'target_has_status', statuses: ['sleep'] } }],
+            },
+        ],
+    },
 ];
 
 export function getCharacter(id: string): CharacterDefinition {

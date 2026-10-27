@@ -57,6 +57,18 @@ export type TargetType = 'single-enemy' | 'all-enemies' | 'single-ally' | 'all-a
  * - guard: a unidade está protegida por quem aplicou o status (`sourceId`).
  *   Os golpes de alvo único dos inimigos que mirarem nela vão para o protetor,
  *   enquanto ele estiver vivo. Golpes em área não mudam.
+ * - sleep: a unidade está adormecida. Perde a vez e acorda logo depois (o
+ *   status acaba no fim dessa vez perdida), ou antes, quando leva um golpe.
+ *   Os golpes em quem está dormindo causam SLEEP_DAMAGE_BONUS a mais (o golpe
+ *   que acorda também). Dano de status (queimadura, veneno, maldição) não
+ *   acorda nem é aumentado.
+ * - drowsy: torpor, o contador que faz dormir. Quando a duração acaba, a
+ *   unidade adormece (status sleep). A purificação tira o torpor antes disso.
+ * - curse: maldição de quem aplicou (`sourceId`). Causa dano no começo de
+ *   cada vez de quem a carrega, como o veneno, e as habilidades de alvo único
+ *   dela não podem mirar em quem a amaldiçoou enquanto houver outro inimigo
+ *   para escolher (golpes em área e revides não mudam: o revide nela não
+ *   acontece). Não é tirada pela purificação.
  */
 export type StatusKind =
     | 'stun'
@@ -76,7 +88,10 @@ export type StatusKind =
     | 'stealth'
     | 'counter'
     | 'form'
-    | 'guard';
+    | 'guard'
+    | 'sleep'
+    | 'drowsy'
+    | 'curse';
 
 /** Um status ativo em uma unidade. */
 export interface StatusEffect {
@@ -89,10 +104,16 @@ export interface StatusEffect {
     /**
      * O significado depende do tipo: dano por turno (burn, poison), pontos
      * restantes (shield) ou fração (modificadores de atributo, passive_up e heal_down).
-     * Zero no stun, no taunt, no stealth, no counter e no form.
+     * Dano por turno também na curse. Zero no stun, no taunt, no stealth, no
+     * counter, no form, no sleep e no drowsy.
      */
     value: number;
     sourceId: string;
+    /**
+     * Status permanente: não gasta duração e só sai quando a unidade cai (ou
+     * por um efeito que o tire). `turns` não conta nele.
+     */
+    permanent?: boolean;
     /**
      * Só nos status de dano por turno que crescem (passiva `status_growth` de
      * quem aplicou): a cada vez que o status causa dano, o próximo dano sobe
@@ -119,6 +140,7 @@ export interface StatusEffect {
  * No efeito 'status', `power` vira o valor do status: dano por turno e escudo
  * são ATK x power; nos modificadores é a própria fração (0.3 = 30%).
  * `chance` (0 a 1) é a chance de pegar; sem ela, sempre pega.
+ * `permanent` faz o status nunca gastar duração (veja StatusEffect.permanent).
  * `to: 'self'` aplica em quem usou, mesmo que a habilidade mire em inimigos.
  *
  * No efeito 'damage', `drain` é roubo de vida: quem usou recupera essa fração
@@ -164,7 +186,7 @@ export interface StatusEffect {
 export type SkillEffect =
     | { type: 'damage'; power: number; drain?: number; perTargetMissingHp?: number; bounces?: number; falloff?: number }
     | { type: 'heal'; power: number }
-    | { type: 'status'; status: StatusKind; turns: number; power: number; chance?: number; to?: 'target' | 'self' }
+    | { type: 'status'; status: StatusKind; turns: number; power: number; chance?: number; to?: 'target' | 'self'; permanent?: boolean }
     | { type: 'cleanse' }
     | { type: 'dispel'; statuses?: StatusKind[] }
     | { type: 'energy'; amount: number; team: 'own' | 'enemy' }
@@ -205,8 +227,11 @@ export interface SkillDefinition {
  * Uma passiva sem condição vale em todo golpe.
  */
 export type PassiveCondition =
-    /** O alvo carrega pelo menos um destes status. */
-    | { type: 'target_has_status'; statuses: StatusKind[] }
+    /**
+     * O alvo carrega pelo menos um destes status. Com `fromSelf`, só conta o
+     * status aplicado por quem tem a passiva (a maldição DA Súcubo).
+     */
+    | { type: 'target_has_status'; statuses: StatusKind[]; fromSelf?: boolean }
     /** O alvo está com menos desta fração da vida (0.4 = abaixo de 40%). */
     | { type: 'target_hp_below'; ratio: number }
     /** O alvo está com mais desta fração da vida. */
@@ -237,9 +262,11 @@ export type PassiveCondition =
  *   bônus cai.
  *
  * status_on_hit: todo golpe da unidade também aplica um status no alvo
- * (`power`, `turns` e `chance` como no efeito 'status' de uma habilidade). O
- * status é aplicado depois do dano, então não vale para o próprio golpe que o
- * aplicou. Se o alvo já carrega o mesmo status com valor maior, fica o maior.
+ * (`power`, `turns`, `chance` e `permanent` como no efeito 'status' de uma
+ * habilidade). O status é aplicado depois do dano, então não vale para o
+ * próprio golpe que o aplicou. Se o alvo já carrega o mesmo status com valor
+ * maior, fica o maior. Com `when`, só nos golpes em alvos que cumprem a
+ * condição ANTES do golpe (quem estava dormindo, mesmo que o golpe o acorde).
  *
  * status_power aumenta o valor dos status que a unidade aplica (0.4 = +40%).
  *
@@ -296,7 +323,7 @@ export type PassiveEffect =
     | { type: 'atk_from_def'; amount: number }
     | { type: 'lifesteal'; amount: number }
     | { type: 'energy_on_crit'; amount: number }
-    | { type: 'status_on_hit'; status: StatusKind; turns: number; power: number; chance?: number }
+    | { type: 'status_on_hit'; status: StatusKind; turns: number; power: number; chance?: number; permanent?: boolean; when?: PassiveCondition }
     | { type: 'damage_per_drain'; amount: number; max?: number }
     | { type: 'damage_per_missing_hp'; amount: number }
     | { type: 'damage_per_enemy_status'; statuses: StatusKind[]; amount: number }
@@ -518,7 +545,7 @@ export type BattleEvent =
      * copiar essa lista: não tem que repetir as regras de duração.
      */
     | { type: 'statuses_changed'; unitId: string; statuses: StatusEffect[] }
-    /** A unidade perdeu a vez (atordoada). */
+    /** A unidade perdeu a vez (atordoada ou dormindo). */
     | { type: 'unit_skipped'; unitId: string; status: StatusKind }
     | { type: 'unit_defeated'; unitId: string }
     /**

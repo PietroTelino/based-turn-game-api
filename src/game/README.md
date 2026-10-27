@@ -82,11 +82,14 @@ Uma habilidade aplica um status com um efeito do tipo `status`:
 | `counter` | Contra-ataque: enquanto a unidade o carrega, todo golpe que ela leva de um inimigo é revidado com o ataque básico dela (a primeira habilidade), fora da vez e sem gastar energia. Vale para golpe de habilidade, em um alvo ou em área, e para o de uma passiva que bate sozinha; dano de status (veneno, queimadura, sangramento) não conta. Um revide por golpe recebido, mesmo que a habilidade bata várias vezes; atordoada ou derrotada pelo golpe, a unidade não revida; um revide não provoca outro. O revide vai em quem bateu, a não ser que um inimigo esteja provocando: aí vai em quem provoca, como qualquer ataque básico. O motor emite `counter_attack` e, em seguida, os eventos do golpe. A purificação não tira. É a Postura de Duelo do Espadachim. | não usa (0) |
 | `form` | A unidade está transformada (veja "Formas"). Quando acaba, ela volta à forma original. Não é aplicado como os outros: quem o cria é o efeito `transform`. | não usa (0) |
 | `guard` | Proteção: os golpes de alvo único dos inimigos que mirarem na unidade vão para quem aplicou o status (`sourceId`), enquanto ele estiver vivo. O motor troca o alvo antes do golpe: `skill_used` já traz o protetor, e `guarded` vem logo depois. Golpes em área não mudam. Ninguém protege a si mesmo (a habilidade não oferece a própria unidade como alvo). É a Égide do Paladino. | não usa (0) |
+| `sleep` | Sono: a unidade perde a vez e acorda no fim dela (o status acaba ali), ou antes, quando leva um golpe. Os golpes em quem dorme causam 50% a mais (`SLEEP_DAMAGE_BONUS`), inclusive o que acorda; dano de status (queimadura, veneno, maldição) não acorda nem é aumentado. Quem dorme não revida (nem o golpe que o acordou). A purificação tira. | não usa (0) |
+| `drowsy` | Torpor: o contador que faz dormir. Quando a duração acaba (no fim de uma vez da unidade), ela adormece: recebe `sleep`, de quem aplicou o torpor, e perde a vez seguinte. A purificação tira antes. É a passiva Torpor da Súcubo. | não usa (0) |
+| `curse` | Maldição: dano no começo de cada vez da unidade, como o veneno. Enquanto a carrega, as habilidades de alvo único dela não podem mirar em quem a amaldiçoou (`sourceId`) se houver outro inimigo para escolher; golpes em área acertam normalmente, e o revide nele não acontece. A purificação não tira. A da Súcubo é permanente (`permanent`). | dano = ATK de quem aplicou x power |
 | `passive_up` | A passiva de começo de vez de quem o carrega cura e causa dano mais forte. É o que a Bênção dá ao Sacerdote: a Aura Restauradora cura 80% a mais nas duas vezes seguintes. | fração a mais (0.8 = 80%) |
 
 Purificação: o efeito `{ type: 'cleanse' }` tira do alvo todos os status
-negativos (`NEGATIVE_STATUSES`: atordoamento, queimadura, veneno e as
-penalidades de atributo) e deixa bônus e escudo. Um aliado atordoado que é
+negativos (`NEGATIVE_STATUSES`: atordoamento, queimadura, veneno, sono,
+torpor e as penalidades de atributo) e deixa bônus e escudo. A maldição fica. Um aliado atordoado que é
 purificado antes da própria vez não a perde, e um veneno que crescia recomeça
 do normal se for aplicado de novo. Está no Toque Curativo do Sacerdote e no
 Abraço da Floresta da Dríade, antes da cura.
@@ -107,8 +110,9 @@ Regras de duração:
 - Cada unidade tem no máximo um status de cada tipo. Reaplicar substitui o anterior.
 - `chance` (0 a 1) é a chance de o status pegar. Sem ela, sempre pega.
 - `to: 'self'` aplica em quem usou a habilidade, mesmo que ela mire em inimigos.
+- `permanent: true` faz o status nunca gastar duração (`StatusEffect.permanent`): só sai quando a unidade cai ou por um efeito que o tire.
 
-O ciclo de uma vez fica assim: queimadura e veneno causam dano, a unidade atordoada perde a vez, a passiva de começo de vez age, a unidade age, os status dela gastam um turno.
+O ciclo de uma vez fica assim: queimadura, veneno e maldição causam dano, a unidade atordoada ou dormindo perde a vez, a passiva de começo de vez age, a unidade age, os status dela gastam um turno.
 
 Para a tela, o motor emite `turn_started` (turno novo, com a ordem, a energia e quanto a fúria vale), `order_changed` (a ordem mudou no meio do turno), `unit_activated` (chegou a vez de alguém), `status_applied`, `status_damage`, `status_expired`, `cleansed` (uma purificação tirou status de alguém), `counter_attack` (alguém em postura revidou um golpe) e `unit_skipped` (para animar) e `statuses_changed`, que traz a lista completa de status da unidade depois de qualquer mudança. A tela só copia essa lista.
 
@@ -120,7 +124,7 @@ mostrada na carta e no painel da batalha. O campo `effect` diz o que ela faz:
 
 | `effect.type` | O que faz | Quem usa |
 | --- | --- | --- |
-| `damage_bonus` | Os golpes causam mais dano (`amount`: 0.3 = +30%). Com `when`, só contra o alvo que está na condição. | Piromante, Criomante, Banshee, Arqueiro, Guerreiro Esqueleto |
+| `damage_bonus` | Os golpes causam mais dano (`amount`: 0.3 = +30%). Com `when`, só contra o alvo que está na condição. | Piromante, Criomante, Banshee, Arqueiro, Guerreiro Esqueleto, Súcubo |
 | `crit_chance_bonus` | Soma à chance de crítico. Também aceita `when`. | Ladino |
 | `ignore_defense` | Os golpes ignoram uma fração da defesa do alvo. | Espadachim |
 | `atk_from_def` | Os golpes somam ao ataque uma fração da defesa de quem bate. Cura e status não mudam. | Cavaleiro |
@@ -129,13 +133,13 @@ mostrada na carta e no painel da batalha. O campo `effect` diz o que ela faz:
 | `damage_per_missing_hp` | Quanto mais ferida a unidade, mais forte ela bate: para cada 1% da vida máxima perdida, `amount`% a mais de dano (amount 1 = 1% por 1%). Conta pontos inteiros de porcentagem e acompanha a vida: com cura, o bônus cai. | Bárbaro |
 | `damage_per_enemy_status` | Os golpes causam `amount` a mais de dano para cada inimigo vivo que carrega algum dos `statuses` (0.1 com `bleed`: +10% por inimigo sangrando). A conta é feita uma vez por golpe, antes dele (`getEnemyStatusBonus`): num golpe em área todos os alvos levam o mesmo bônus, e o status que o golpe aplica só conta a partir do golpe seguinte. Numa habilidade de vários golpes (o Dilacerar), o segundo já conta o que o primeiro causou. Entra no dano previsto da habilidade. | Druida (lobo) |
 | `energy_on_crit` | Um acerto crítico devolve energia ao time, até o máximo de 10 (pode passar da energia do turno). | Bárbaro |
-| `status_on_hit` | Todo golpe da unidade também aplica um status no alvo (`status`, `turns`, `power`, `chance`, como no efeito de uma habilidade). É aplicado depois do dano, então não vale para o próprio golpe; se o alvo já tem o mesmo status mais forte, fica o mais forte. | Arqueiro, Druida (lobo) |
+| `status_on_hit` | Todo golpe da unidade também aplica um status no alvo (`status`, `turns`, `power`, `chance`, `permanent`, como no efeito de uma habilidade). É aplicado depois do dano, então não vale para o próprio golpe; se o alvo já tem o mesmo status mais forte, fica o mais forte. Com `when`, só nos alvos que cumprem a condição antes do golpe (a Súcubo amaldiçoa quem estava dormindo, mesmo que o golpe o acorde). | Arqueiro, Druida (lobo), Súcubo |
 | `status_power` | Os status dos tipos listados que a unidade aplica valem mais (`amount`: 0.6 = +60%). | ninguém, por enquanto |
 | `status_growth` | O dano por turno dos status listados que a unidade aplica cresce com o tempo: o primeiro dano é o normal e cada turno seguinte soma `amount` do valor original (0.6: 100%, 160%, 220%...). O status guarda `growth` e `ticks` (quantas vezes já causou dano); o dano de agora é `getStatusTickDamage`. Renovar o status antes de ele acabar mantém a conta, mesmo que quem renove seja um aliado sem a passiva; se ele acabar, o próximo recomeça do normal. Depois de cada dano o motor emite `statuses_changed`. | Guardião |
 | `extra_action_on_transform` | Quando a unidade se transforma, a vez não acaba: ela age de novo, já na forma nova. | Druida |
 | `stealth_each_turn` | No começo de cada turno a unidade fica escondida (status `stealth`) até agir ou levar dano. O motor só emite `statuses_changed`: a tela mostra a figura quase transparente. | Ladino |
 | `count_corpses` | Conta os cadáveres do time: aliados derrotados que ainda não foram erguidos. O número fica em `unit.passiveStacks` e o motor avisa quando ele muda (`passive_triggered` com `stacks`). É só a conta: quem usa os cadáveres é o efeito `summon`. | Necromante |
-| `battle_start` | Age sozinha uma vez só, quando a batalha começa: no turno 1, antes da vez de qualquer unidade, aplica `effects` em todos os inimigos vivos (`target: 'all-enemies'`). O motor emite `passive_triggered` com os alvos e depois os eventos dos efeitos. Quem está escondido também é atingido (não é golpe de alvo único), e uma unidade que entra depois (invocação) não dispara a passiva de novo. | Guardião |
+| `battle_start` | Age sozinha uma vez só, quando a batalha começa: no turno 1, antes da vez de qualquer unidade, aplica `effects` em todos os inimigos vivos (`target: 'all-enemies'`). O motor emite `passive_triggered` com os alvos e depois os eventos dos efeitos. Quem está escondido também é atingido (não é golpe de alvo único), e uma unidade que entra depois (invocação) não dispara a passiva de novo. | Guardião, Súcubo |
 | `turn_start` | Age sozinha no começo da vez da unidade, se ela não estiver atordoada: aplica `effects` em `target`, como uma habilidade sem custo. `all-allies` (se só cura, pula quem está com a vida cheia), `fastest-enemy` ou `lowest-ally` (o aliado vivo com a menor fração da vida, a própria unidade inclusive). | Sacerdote, Dríade, Paladino |
 | `damage_per_dispel` | Como `damage_per_drain`, mas a carga vem de tirar efeitos: uma por status que a unidade tira de um inimigo (efeito `dispel`), até `max`. As cargas já valem para o golpe seguinte, mesmo dentro da mesma habilidade. | Inquisidora |
 | `team_damage_bonus` | Vale para os golpes de todo o time, não só os da unidade, enquanto ela estiver viva: +`amount` de dano nos alvos que cumprem `when`. Quando faz diferença, é anunciada em nome de quem tem a passiva. | Xamã |
@@ -146,7 +150,7 @@ e os outros em `also` (a do Arqueiro soma dano com condição e redução de
 defesa no golpe).
 
 Condições (`when`), sempre sobre o alvo do golpe: `target_has_status` (tem
-pelo menos um dos status), `target_hp_below` e `target_hp_above` (fração da
+pelo menos um dos status; com `fromSelf`, só os que quem tem a passiva aplicou), `target_hp_below` e `target_hp_above` (fração da
 vida máxima).
 
 As passivas do Sacerdote e da Dríade eram habilidades ativas de 3 de energia

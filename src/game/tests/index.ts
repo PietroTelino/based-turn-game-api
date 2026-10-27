@@ -12,3 +12,4 @@ import './passives.test';
 import './ai.test';
 import './target-preview.test';
 import './mechanics.test';
+import './sleep.test';

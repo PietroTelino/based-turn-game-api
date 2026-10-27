@@ -33,6 +33,9 @@ const STATUS_NAMES: Record<StatusKind, string> = {
     counter: 'contra-ataque',
     form: 'transformação',
     guard: 'proteção',
+    sleep: 'sono',
+    drowsy: 'torpor',
+    curse: 'maldição',
 };
 
 function describe(state: BattleState, event: BattleEvent): string | null {

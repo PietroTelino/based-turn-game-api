@@ -107,7 +107,8 @@ describe('catálogo de personagens', () => {
                 // "Para cada 1% de vida perdida, N% a mais."
                 numbers.push(`${effect.amount}% a mais`);
             } else if (effect.type === 'status_on_hit') {
-                numbers.push(percent(effect.power), `${effect.turns} turno`);
+                // Status permanente não tem duração: a descrição diz que é para sempre.
+                numbers.push(percent(effect.power), effect.permanent ? 'para sempre' : `${effect.turns} turno`);
             } else if (effect.type === 'turn_start' || effect.type === 'battle_start') {
                 for (const item of effect.effects) {
                     if (item.type === 'cleanse' || item.type === 'dispel' || item.type === 'transform' || item.type === 'summon' || item.type === 'revive') continue;
@@ -117,7 +118,8 @@ describe('catálogo de personagens', () => {
                         continue;
                     }
 
-                    numbers.push(percent(item.power));
+                    // Status sem valor (atordoar, torpor) só têm a duração.
+                    if (item.type !== 'status' || item.power !== 0) numbers.push(percent(item.power));
                     if (item.type === 'status') numbers.push(`${item.turns} turno`);
                 }
             } else {

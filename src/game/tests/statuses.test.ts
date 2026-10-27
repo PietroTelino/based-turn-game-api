@@ -513,7 +513,7 @@ describe('efeito: purificação', () => {
     });
 
     it('os status negativos são exatamente os que atrapalham quem carrega', () => {
-        assert.deepEqual([...NEGATIVE_STATUSES].sort(), ['atk_down', 'bleed', 'burn', 'def_down', 'heal_down', 'poison', 'speed_down', 'stun']);
+        assert.deepEqual([...NEGATIVE_STATUSES].sort(), ['atk_down', 'bleed', 'burn', 'def_down', 'drowsy', 'heal_down', 'poison', 'sleep', 'speed_down', 'stun']);
     });
 });
 

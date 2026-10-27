@@ -8,7 +8,9 @@ import {
     getStatusTickDamage,
     getUnit,
     hasStatus,
+    NEGATIVE_STATUSES,
     POSITIVE_STATUSES,
+    SKIP_STATUSES,
 } from './engine';
 import type { AvailableAction, BattleAction, BattleState, BattleUnit } from './types';
 
@@ -177,17 +179,22 @@ function isPurify(option: AvailableAction): boolean {
 const PURIFY_DAMAGE_RATIO = 0.1;
 
 /**
- * Quanto vale purificar a unidade: 0 se não compensa. Atordoamento vale mais
- * que tudo (devolve a vez); dano por turno conta a partir de 10% da vida
- * máxima por turno, e quanto maior, mais urgente.
+ * Quanto vale purificar a unidade: 0 se não compensa. Atordoamento e sono
+ * valem mais que tudo (devolvem a vez); o torpor prestes a virar sono vem
+ * logo atrás; dano por turno conta a partir de 10% da vida máxima por turno,
+ * e quanto maior, mais urgente. Só conta o que a purificação tira (a
+ * maldição, não).
  */
 function purifyUrgency(unit: BattleUnit): number {
-    const perTurn = getStatuses(unit)
+    const statuses = getStatuses(unit).filter((status) => NEGATIVE_STATUSES.includes(status.kind));
+    const perTurn = statuses
         .filter((status) => DAMAGE_STATUSES.includes(status.kind))
         .reduce((total, status) => total + getStatusTickDamage(status), 0);
     const ratio = perTurn / unit.stats.maxHp;
+    const skips = statuses.some((status) => SKIP_STATUSES.includes(status.kind));
+    const drowsy = statuses.some((status) => status.kind === 'drowsy' && status.turns <= 1);
 
-    return (hasStatus(unit, 'stun') ? 10 : 0) + (ratio >= PURIFY_DAMAGE_RATIO ? ratio : 0);
+    return (skips ? 10 : 0) + (drowsy ? 5 : 0) + (ratio >= PURIFY_DAMAGE_RATIO ? ratio : 0);
 }
 
 /** Purifica o aliado que mais precisa, com a habilidade mais barata que faz isso. */

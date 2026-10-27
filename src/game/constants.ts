@@ -33,5 +33,8 @@ export const FURY_DAMAGE_PER_TURN = 0.5;
  */
 export const MIN_STAT_FACTOR = 0.2;
 
+/** Quanto a mais os golpes causam em quem está dormindo (status sleep): 0.5 = +50%. */
+export const SLEEP_DAMAGE_BONUS = 0.5;
+
 /** Os cenários possíveis. Cada batalha nova sorteia um deles. */
 export const ARENAS: readonly ArenaId[] = ['muralha', 'floresta', 'lago-gelado'];

@@ -6,6 +6,7 @@ import {
     MAX_ENERGY,
     MAX_TEAM_SIZE,
     MIN_STAT_FACTOR,
+    SLEEP_DAMAGE_BONUS,
 } from './constants';
 import { GameRuleError } from './errors';
 import { nextRandom } from './rng';
@@ -60,10 +61,12 @@ import type {
  * O ciclo de uma vez:
  *   1. chega a vez da unidade;
  *   2. queimadura e veneno causam dano;
- *   3. se a unidade está atordoada, perde a vez (volta ao passo 1 com a próxima);
+ *   3. se a unidade está atordoada ou dormindo, perde a vez (volta ao passo 1
+ *      com a próxima; quem dormia acorda no fim dessa vez perdida);
  *   4. a passiva de começo de vez da unidade age, se ela tiver uma;
  *   5. a unidade age (applyAction);
- *   6. termina a vez: os status dela gastam um turno de duração.
+ *   6. termina a vez: os status dela gastam um turno de duração (quem tinha
+ *      torpor e ele acabou adormece).
  *
  * Quem tem a passiva de ação extra e se transforma no passo 5 repete o passo
  * 5 antes do 6: age de novo, já na forma nova.
@@ -92,8 +95,12 @@ const STAT_MODIFIERS: Partial<Record<StatusKind, { stat: 'atk' | 'def' | 'speed'
     speed_down: { stat: 'speed', sign: -1 },
 };
 
-/** Os status que atrapalham quem os carrega. São os que a purificação (efeito 'cleanse') remove. */
-export const NEGATIVE_STATUSES: StatusKind[] = ['stun', 'burn', 'poison', 'bleed', 'heal_down', 'atk_down', 'def_down', 'speed_down'];
+/**
+ * Os status que atrapalham quem os carrega. São os que a purificação (efeito
+ * 'cleanse') remove. A maldição (curse) também atrapalha, mas a purificação
+ * não a tira.
+ */
+export const NEGATIVE_STATUSES: StatusKind[] = ['stun', 'burn', 'poison', 'bleed', 'heal_down', 'atk_down', 'def_down', 'speed_down', 'sleep', 'drowsy'];
 
 /**
  * Os status que ajudam quem os carrega. São os que o efeito 'dispel' remove.
@@ -102,7 +109,10 @@ export const NEGATIVE_STATUSES: StatusKind[] = ['stun', 'burn', 'poison', 'bleed
 export const POSITIVE_STATUSES: StatusKind[] = ['shield', 'atk_up', 'def_up', 'speed_up', 'passive_up', 'taunt', 'stealth', 'counter', 'guard'];
 
 /** Os status que causam dano no começo da vez de quem os carrega. */
-export const DAMAGE_STATUSES: StatusKind[] = ['burn', 'poison', 'bleed'];
+export const DAMAGE_STATUSES: StatusKind[] = ['burn', 'poison', 'bleed', 'curse'];
+
+/** Os status que fazem a unidade perder a vez. */
+export const SKIP_STATUSES: StatusKind[] = ['stun', 'sleep'];
 
 /** O id da forma original de quem se transforma, em `unit.baseForm`. */
 export const BASE_FORM = 'base';
@@ -169,14 +179,17 @@ function getPassiveEffects(unit: BattleUnit): { passive: PassiveDefinition; effe
     return getPassives(unit).flatMap((passive) => [passive.effect, ...(passive.also ?? [])].map((effect) => ({ passive, effect })));
 }
 
-function meets(condition: PassiveCondition | undefined, target: BattleUnit): boolean {
+/** `owner` é quem tem a passiva: as condições `fromSelf` olham só os status que ela aplicou. */
+function meets(condition: PassiveCondition | undefined, target: BattleUnit, owner?: BattleUnit): boolean {
     if (!condition) {
         return true;
     }
 
     switch (condition.type) {
         case 'target_has_status':
-            return condition.statuses.some((kind) => hasStatus(target, kind));
+            return condition.statuses.some((kind) =>
+                getStatuses(target).some((status) => status.kind === kind && (!condition.fromSelf || status.sourceId === owner?.id)),
+            );
         case 'target_hp_below':
             return target.hp < target.stats.maxHp * condition.ratio;
         case 'target_hp_above':
@@ -225,7 +238,7 @@ function getHitModifiers(state: BattleState, attacker: BattleUnit, target?: Batt
         switch (effect.type) {
             case 'damage_bonus':
             case 'crit_chance_bonus': {
-                if (effect.when && (!target || !meets(effect.when, target))) {
+                if (effect.when && (!target || !meets(effect.when, target, attacker))) {
                     break;
                 }
 
@@ -249,13 +262,20 @@ function getHitModifiers(state: BattleState, attacker: BattleUnit, target?: Batt
                 modifiers.energyOnCrit += effect.amount;
                 break;
 
+            // Com condição, ela é olhada agora, antes do golpe: quem estava
+            // dormindo conta, mesmo que o golpe o acorde.
             case 'status_on_hit':
+                if (effect.when && (!target || !meets(effect.when, target, attacker))) {
+                    break;
+                }
+
                 modifiers.statusOnHit.push({
                     type: 'status',
                     status: effect.status,
                     turns: effect.turns,
                     power: effect.power,
                     ...(effect.chance !== undefined && { chance: effect.chance }),
+                    ...(effect.permanent && { permanent: true }),
                 });
                 break;
 
@@ -300,7 +320,7 @@ function getHitModifiers(state: BattleState, attacker: BattleUnit, target?: Batt
         if (ally.team !== attacker.team || !isAlive(ally)) continue;
 
         for (const { passive, effect } of getPassiveEffects(ally)) {
-            if (effect.type === 'team_damage_bonus' && target && meets(effect.when, target)) {
+            if (effect.type === 'team_damage_bonus' && target && meets(effect.when, target, ally)) {
                 modifiers.damageBonus += effect.amount;
                 modifiers.announced.push({ unit: ally, passive });
             }
@@ -451,6 +471,7 @@ export function calculateStatusValue(caster: Stats, effect: StatusSkillEffect): 
         case 'burn':
         case 'poison':
         case 'bleed':
+        case 'curse':
         case 'shield':
             return Math.max(1, Math.round(caster.atk * effect.power));
         case 'stun':
@@ -832,8 +853,11 @@ function getCandidateTargets(state: BattleState, actor: BattleUnit, skill: Skill
             const visible = alive.filter((u) => !hasStatus(u, 'stealth'));
             const enemies = visible.length > 0 ? visible : alive;
             const taunting = enemies.filter((u) => hasStatus(u, 'taunt'));
+            const allowed = taunting.length > 0 ? taunting : enemies;
+            // Amaldiçoada: não mira em quem a amaldiçoou, se houver outro em quem mirar.
+            const spared = allowed.filter((u) => !isCurser(actor, u));
 
-            return taunting.length > 0 ? taunting : enemies;
+            return spared.length > 0 ? spared : allowed;
         }
         case 'all-enemies':
             return state.units.filter((u) => u.team !== actor.team && isAlive(u));
@@ -848,6 +872,11 @@ function getCandidateTargets(state: BattleState, actor: BattleUnit, skill: Skill
         case 'corpse':
             return state.units.filter((u) => u.team === actor.team && isCorpse(u)).slice(0, 1);
     }
+}
+
+/** `curser` amaldiçoou `unit` (status curse aplicado por ele). */
+function isCurser(unit: BattleUnit, curser: BattleUnit): boolean {
+    return getStatuses(unit).some((status) => status.kind === 'curse' && status.sourceId === curser.id);
 }
 
 /** A habilidade põe o status guard (proteção) no alvo. */
@@ -999,6 +1028,7 @@ function applyEffect(
                 turns: effect.turns,
                 value: withStatusPower(actor, effect.status, calculateStatusValue(getEffectiveStats(actor), effect)),
                 sourceId: actor.id,
+                ...(effect.permanent && { permanent: true }),
                 ...(growth > 0 && { growth, ticks: previous?.ticks ?? 0 }),
                 appliedOnStep: state.step,
             };
@@ -1097,12 +1127,14 @@ function strike(
     const defender = getEffectiveStats(target);
     // Golpe de execução: quanto mais vida o alvo já perdeu, mais forte.
     const executeBonus = ((effect.perTargetMissingHp ?? 0) * getMissingHpPercent(target)) / 100;
+    // Quem está dormindo leva mais (inclusive o golpe que o acorda).
+    const asleep = hasStatus(target, 'sleep');
     const amount = calculateDamage(
         getAttackStats(actor),
         { ...defender, def: defender.def * Math.max(0, 1 - modifiers.ignoreDefense) },
         effect.power,
         critical,
-        getFuryMultiplier(state.turn) * (1 + modifiers.damageBonus + executeBonus),
+        getFuryMultiplier(state.turn) * (1 + modifiers.damageBonus + executeBonus) * (asleep ? 1 + SLEEP_DAMAGE_BONUS : 1),
     );
     const absorbed = absorbWithShield(target, amount);
     const lost = Math.min(target.hp, amount - absorbed);
@@ -1118,9 +1150,11 @@ function strike(
         hp: target.hp,
     });
 
-    // Levar um golpe (em área, ou de uma passiva que escolhe o alvo sozinha) revela quem estava escondido.
+    // Levar um golpe (em área, ou de uma passiva que escolhe o alvo sozinha)
+    // revela quem estava escondido e acorda quem estava dormindo.
     if (isAlive(target)) {
         reveal(target, events);
+        wake(target, events);
     }
 
     if (absorbed > 0) {
@@ -1509,7 +1543,7 @@ function applyTurnStartPassives(state: BattleState, unit: BattleUnit, events: Ba
  *   passiva que bate sozinha. Dano de status (veneno, queimadura,
  *   sangramento) não tem quem revidar e não conta.
  * - Um revide por golpe recebido, mesmo que a habilidade bata várias vezes.
- * - Quem está atordoado ou foi derrotado pelo golpe não revida.
+ * - Quem está atordoado ou dormindo, ou foi derrotado pelo golpe, não revida.
  * - O revide não provoca outro revide (senão dois em postura nunca parariam).
  * - O revide é um ataque básico, então obedece à provocação: se um inimigo
  *   está provocando, o revide vai nele, e não em quem bateu (se quem bateu é
@@ -1526,11 +1560,18 @@ function applyCounterAttacks(state: BattleState, attacker: BattleUnit, events: B
         }
     }
 
+    // Quem o golpe acordou estava dormindo quando apanhou: também não revida.
+    const woken = events.slice(from).filter((event) => event.type === 'status_expired' && event.status === 'sleep').map((event) => (event.type === 'status_expired' ? event.unitId : ''));
+
     for (const unitId of hitIds) {
         const unit = getUnit(state, unitId);
         const basic = unit.skills[0];
 
-        if (!basic || unit.team === attacker.team || !isAlive(unit) || !hasStatus(unit, 'counter') || hasStatus(unit, 'stun')) {
+        if (woken.includes(unitId)) {
+            continue;
+        }
+
+        if (!basic || unit.team === attacker.team || !isAlive(unit) || !hasStatus(unit, 'counter') || SKIP_STATUSES.some((kind) => hasStatus(unit, kind))) {
             continue;
         }
 
@@ -1539,7 +1580,8 @@ function applyCounterAttacks(state: BattleState, attacker: BattleUnit, events: B
         const taunting = state.units.filter((enemy) => enemy.team !== unit.team && isAlive(enemy) && hasStatus(enemy, 'taunt'));
         const target = taunting.length === 0 || taunting.includes(attacker) ? attacker : taunting[0];
 
-        if (!target || !isAlive(target)) {
+        // Quem está amaldiçoado não revida em quem o amaldiçoou.
+        if (!target || !isAlive(target) || isCurser(unit, target)) {
             continue;
         }
 
@@ -1551,6 +1593,17 @@ function applyCounterAttacks(state: BattleState, attacker: BattleUnit, events: B
 
         announceStacks(unit, stacksBefore, events);
     }
+}
+
+/** Acorda a unidade (tira o status sleep), se ela estava dormindo, e avisa a tela. */
+function wake(unit: BattleUnit, events: BattleEvent[]): void {
+    if (!hasStatus(unit, 'sleep')) {
+        return;
+    }
+
+    unit.statuses = unit.statuses.filter((status) => status.kind !== 'sleep');
+    events.push({ type: 'status_expired', unitId: unit.id, status: 'sleep' });
+    pushStatusesChanged(unit, events);
 }
 
 /** Tira a unidade do esconderijo (status stealth), se ela estava escondida, e avisa a tela. */
@@ -1797,8 +1850,12 @@ function activateNext(state: BattleState, events: BattleEvent[]): void {
             continue;
         }
 
-        if (hasStatus(unit, 'stun')) {
-            events.push({ type: 'unit_skipped', unitId: unit.id, status: 'stun' });
+        // Atordoada ou dormindo: perde a vez. O sono (que dura uma vez) acaba
+        // aqui, no fim da vez perdida: a unidade acorda.
+        const skip = SKIP_STATUSES.find((kind) => hasStatus(unit, kind));
+
+        if (skip) {
+            events.push({ type: 'unit_skipped', unitId: unit.id, status: skip });
             endActivation(state, unit, events);
             continue;
         }
@@ -1874,7 +1931,10 @@ function applyDamageOverTime(state: BattleState, unit: BattleUnit, events: Battl
  * Fim da vez de uma unidade: cada status dela gasta um turno de duração. Um
  * status aplicado nesta mesma vez (um bônus que a unidade deu a si mesma, por
  * exemplo) só começa a contar na próxima, para que "dura 2 turnos" signifique
- * duas vezes agindo com ele.
+ * duas vezes agindo com ele. Status permanentes não contam.
+ *
+ * Quando o torpor (drowsy) acaba, a unidade adormece: o sono vem de quem
+ * aplicou o torpor e dura uma vez (a próxima, que ela perde).
  */
 function endActivation(state: BattleState, unit: BattleUnit, events: BattleEvent[]): void {
     if (!isAlive(unit)) {
@@ -1884,9 +1944,10 @@ function endActivation(state: BattleState, unit: BattleUnit, events: BattleEvent
     const remaining: StatusEffect[] = [];
     let changed = false;
     let formEnded = false;
+    let fallsAsleep: StatusEffect | undefined;
 
     for (const status of unit.statuses) {
-        if (status.appliedOnStep === state.step) {
+        if (status.appliedOnStep === state.step || status.permanent) {
             remaining.push(status);
             continue;
         }
@@ -1898,7 +1959,18 @@ function endActivation(state: BattleState, unit: BattleUnit, events: BattleEvent
         } else {
             events.push({ type: 'status_expired', unitId: unit.id, status: status.kind });
             formEnded ||= status.kind === 'form';
+
+            if (status.kind === 'drowsy') {
+                fallsAsleep = status;
+            }
         }
+    }
+
+    if (fallsAsleep) {
+        const sleep: StatusEffect = { kind: 'sleep', turns: 1, value: 0, sourceId: fallsAsleep.sourceId, appliedOnStep: state.step };
+
+        remaining.splice(0, remaining.length, ...remaining.filter((status) => status.kind !== 'sleep'), sleep);
+        events.push({ type: 'status_applied', sourceId: sleep.sourceId, targetId: unit.id, status: 'sleep', turns: sleep.turns, value: 0 });
     }
 
     if (changed) {
