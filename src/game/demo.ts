@@ -35,6 +35,7 @@ const STATUS_NAMES: Record<StatusKind, string> = {
     guard: 'proteção',
     sleep: 'sono',
     drowsy: 'torpor',
+    countdown: 'contagem do sono',
     curse: 'maldição',
 };
 

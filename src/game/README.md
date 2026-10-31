@@ -219,9 +219,11 @@ batalha. Hoje só o Necromante tem, com o **Guerreiro Esqueleto**.
   `CHARACTERS`, então não pode ser escolhida para um time.
 - Quem invoca é o efeito `{ type: 'summon', summon: 'esqueleto' }`, numa
   habilidade de alvo `corpse`: o cadáver de um aliado, isto é, uma unidade
-  derrotada do próprio time que ainda não foi erguida (`isCorpse`). O motor
-  escolhe o primeiro cadáver do time; sem cadáver, a habilidade aparece como
-  não utilizável e `applyAction` recusa com `INVALID_TARGET`.
+  derrotada do próprio time que ainda não foi erguida (`isCorpse`). Como num
+  alvo único, o jogador escolhe qual (`requiresTarget`, e `targetIds` traz
+  todos os caídos); sem `targetId`, vale o primeiro cadáver do time. Sem
+  cadáver, a habilidade aparece como não utilizável e `applyAction` recusa
+  com `INVALID_TARGET`.
 - A unidade derrotada dá lugar à invocação **no mesmo lugar do time** (mesmo
   id, `A3` continua `A3`), com vida cheia e sem nada do que era. O time nunca
   passa do tamanho com que começou.
@@ -233,7 +235,8 @@ batalha. Hoje só o Necromante tem, com o **Guerreiro Esqueleto**.
 - Enquanto houver uma invocação de pé, o time não perdeu.
 - Para a tela: `summoned` traz a unidade nova inteira (`unit`), para trocar
   pela antiga.
-- A IA ergue sempre que há cadáver e energia.
+- A IA ergue sempre que há cadáver e energia (e, na ressurreição, traz de
+  volta o caído de maior ataque).
 
 ## Energia, ressurreição e golpes que saltam
 
@@ -244,7 +247,7 @@ batalha. Hoje só o Necromante tem, com o **Guerreiro Esqueleto**.
   turno, a que o inimigo perde só faz falta a quem dele ainda vai agir.
   Canção de Marcha e Dissonância, do Bardo.
 - **Ressurreição**: o efeito `{ type: 'revive', ratio: 0.4 }`, numa habilidade
-  de alvo `corpse`, traz de volta o primeiro aliado caído do time como ele
+  de alvo `corpse`, traz de volta o aliado caído escolhido como ele
   era, com essa fração da vida máxima e sem status (quem estava transformado
   volta na forma original). Como a invocação, ele entra na fila de quem ainda
   vai agir neste turno. O motor emite `revived` e `order_changed`.

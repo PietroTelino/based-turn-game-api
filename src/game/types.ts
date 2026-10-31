@@ -28,8 +28,9 @@ export interface Stats {
  * As "single-*" exigem que o jogador escolha um alvo; as outras não.
  *
  * 'corpse' é o cadáver de um aliado: uma unidade derrotada do próprio time que
- * ainda não foi erguida. O motor escolhe sozinho (o primeiro cadáver do time);
- * sem cadáver, a habilidade não pode ser usada.
+ * ainda não foi erguida. O jogador escolhe qual (como num alvo único); sem
+ * `targetId`, vale o primeiro cadáver do time. Sem cadáver, a habilidade não
+ * pode ser usada.
  */
 export type TargetType = 'single-enemy' | 'all-enemies' | 'single-ally' | 'all-allies' | 'self' | 'corpse';
 
@@ -62,7 +63,10 @@ export type TargetType = 'single-enemy' | 'all-enemies' | 'single-ally' | 'all-a
  *   Os golpes em quem está dormindo causam SLEEP_DAMAGE_BONUS a mais (o golpe
  *   que acorda também). Dano de status (queimadura, veneno, maldição) não
  *   acorda nem é aumentado.
- * - drowsy: torpor, o contador que faz dormir. Quando a duração acaba, a
+ * - countdown: contagem de quem a carrega (passiva `countdown`). `turns` é
+ *   quantas vezes dela faltam: no começo da vez em que ela chegaria ao fim, a
+ *   passiva age. Não é tirada por purificação nem por 'dispel'.
+ * - drowsy: torpor, o contador que faz dormir (batalhas antigas). Quando a duração acaba, a
  *   unidade adormece (status sleep). A purificação tira o torpor antes disso.
  * - curse: maldição de quem aplicou (`sourceId`). Causa dano no começo de
  *   cada vez de quem a carrega, como o veneno, e as habilidades de alvo único
@@ -91,7 +95,8 @@ export type StatusKind =
     | 'guard'
     | 'sleep'
     | 'drowsy'
-    | 'curse';
+    | 'curse'
+    | 'countdown';
 
 /** Um status ativo em uma unidade. */
 export interface StatusEffect {
@@ -315,6 +320,12 @@ export type PassiveCondition =
  *
  * energy_when_empty: no começo da vez da unidade (se ela não estiver
  * atordoada), se o time dela está sem energia, recupera `amount`.
+ *
+ * countdown: quando a batalha começa, a unidade ganha o status `countdown`
+ * com `turns` (a contagem, à vista de todos, fica nela). Cada vez dela gasta
+ * um, e no começo da vez de número `turns` (a 3ª, com 3) os `effects` são
+ * aplicados em todos os inimigos vivos, uma vez só. Vale mesmo que ela esteja
+ * atordoada ou dormindo nessa vez; se ela cair antes, nada acontece.
  */
 export type PassiveEffect =
     | { type: 'damage_bonus'; amount: number; when?: PassiveCondition }
@@ -336,7 +347,8 @@ export type PassiveEffect =
     | { type: 'turn_start'; target: 'all-allies' | 'fastest-enemy' | 'lowest-ally'; effects: SkillEffect[] }
     | { type: 'damage_per_dispel'; amount: number; max?: number }
     | { type: 'team_damage_bonus'; amount: number; when: PassiveCondition }
-    | { type: 'energy_when_empty'; amount: number };
+    | { type: 'energy_when_empty'; amount: number }
+    | { type: 'countdown'; turns: number; target: 'all-enemies'; effects: SkillEffect[] };
 
 export interface PassiveDefinition {
     /** "<personagem>.<passiva>", como nas habilidades. */

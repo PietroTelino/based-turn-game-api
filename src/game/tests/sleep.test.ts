@@ -29,7 +29,7 @@ const torpor: PassiveDefinition = {
     id: 's.torpor',
     name: 'Torpor',
     description: '',
-    effect: { type: 'battle_start', target: 'all-enemies', effects: [{ type: 'status', status: 'drowsy', turns: 3, power: 0 }] },
+    effect: { type: 'countdown', turns: 3, target: 'all-enemies', effects: [{ type: 'status', status: 'sleep', turns: 1, power: 0 }] },
     also: [{ type: 'status_on_hit', status: 'curse', turns: 1, power: 0.4, permanent: true, when: { type: 'target_has_status', statuses: ['sleep'] } }],
 };
 
@@ -148,7 +148,7 @@ describe('sono', () => {
     });
 });
 
-describe('torpor e maldição (a passiva da Súcubo)', () => {
+describe('contagem do sono e maldição (a passiva da Súcubo)', () => {
     function setup() {
         return createBattle({
             teamA: [makeCharacter('s', { speed: 300 }, [pass('s'), area('s')], [curse, torpor])],
@@ -157,33 +157,88 @@ describe('torpor e maldição (a passiva da Súcubo)', () => {
         }).state;
     }
 
-    it('a batalha começa com torpor de 3 turnos em todos os inimigos', () => {
-        const state = setup();
+    /** Em que turnos cada unidade perdeu a vez, jogando até o fim do turno `last`. */
+    function skips(start: BattleState, last: number): Record<string, number[]> {
+        let state = start;
+        const result: Record<string, number[]> = {};
 
-        for (const id of ['B1', 'B2']) {
-            const drowsy = getUnit(state, id).statuses.find((item) => item.kind === 'drowsy');
-
-            assert.equal(drowsy?.turns, 3);
-            assert.equal(drowsy?.sourceId, 'A1');
-        }
-    });
-
-    it('quem ainda tem o torpor ao fim de 3 turnos adormece e perde a 4ª vez', () => {
-        let state = setup();
-        const skippedOnTurn: number[] = [];
-
-        while (state.turn <= 4) {
+        while (state.turn <= last) {
             const { state: next, events } = passTurn(state);
+            let turn = state.turn;
 
-            // As vezes perdidas acontecem dentro desta ação, ainda no turno de `state`.
-            for (const event of eventsOfType(events, 'unit_skipped')) {
-                if (event.unitId === 'B1') skippedOnTurn.push(state.turn);
+            // Uma mesma ação pode virar o turno; conta cada vez perdida no turno em que aconteceu.
+            for (const event of events) {
+                if (event.type === 'turn_started') turn = event.turn;
+                if (event.type === 'unit_skipped' && turn <= last) (result[event.unitId] ??= []).push(turn);
             }
 
             state = next;
         }
 
-        assert.deepEqual(skippedOnTurn, [4]);
+        return result;
+    }
+
+    it('a contagem começa em 3 na própria Súcubo; os inimigos não recebem nada', () => {
+        const state = setup();
+        const countdown = getUnit(state, 'A1').statuses.find((item) => item.kind === 'countdown');
+
+        assert.equal(countdown?.turns, 3);
+        assert.deepEqual(kinds(state, 'B1'), []);
+        assert.deepEqual(kinds(state, 'B2'), []);
+    });
+
+    it('a contagem desce no começo de cada vez dela: 3, 2 e dispara no 3º', () => {
+        let state = setup();
+        const seen: (number | undefined)[] = [];
+
+        while (state.turn <= 3) {
+            if (state.activeUnitId === 'A1') seen.push(getUnit(state, 'A1').statuses.find((item) => item.kind === 'countdown')?.turns);
+            state = passTurn(state).state;
+        }
+
+        assert.deepEqual(seen, [3, 2, undefined]);
+    });
+
+    it('no começo do 3º turno dela, todos os inimigos adormecem e a contagem sai', () => {
+        let state = setup();
+
+        while (!(state.turn === 2 && state.activeUnitId === 'B2')) state = passTurn(state).state;
+
+        // B2 encerra o turno 2: abre o turno 3 e chega a vez da Súcubo.
+        const { state: after, events } = passTurn(state);
+
+        assert.equal(after.activeUnitId, 'A1');
+        assert.ok(events.some((event) => event.type === 'passive_triggered' && event.passiveId === 's.torpor' && event.targetIds.join() === 'B1,B2'));
+        assert.ok(kinds(after, 'B1').includes('sleep'));
+        assert.ok(kinds(after, 'B2').includes('sleep'));
+        assert.ok(!kinds(after, 'A1').includes('countdown'));
+    });
+
+    it('mais rápida que os inimigos, eles perdem a vez do 3º turno; depois acordam, e não volta a acontecer', () => {
+        const result = skips(setup(), 6);
+
+        assert.deepEqual(result, { B1: [3], B2: [3] });
+    });
+
+    it('mais lenta que os inimigos, eles já agiram no 3º turno: perdem a vez do 4º', () => {
+        const state = createBattle({
+            teamA: [makeCharacter('s', { speed: 50 }, [pass('s')], [curse, torpor])],
+            teamB: [makeCharacter('b', { speed: 200 }, [pass('b')]), makeCharacter('c', { speed: 100 }, [pass('c')])],
+            seed: 1,
+        }).state;
+
+        assert.deepEqual(skips(state, 5), { B1: [4], B2: [4] });
+    });
+
+    it('se a Súcubo cair antes, ninguém adormece', () => {
+        const state = setup();
+
+        getUnit(state, 'A1').hp = 0;
+        state.units.push({ ...structuredClone(getUnit(state, 'B1')), id: 'A9', team: 'A', hp: 1000, statuses: [], skills: [pass('z')], characterId: 'z' });
+        state.order = [...state.order, 'A9'];
+        state.activeUnitId = 'B1';
+
+        assert.deepEqual(skips(state, 5), {});
     });
 
     it('golpear um adormecido amaldiçoa para sempre: 40% do ATK por vez, e os golpes seguintes causam 30% a mais', () => {
@@ -256,15 +311,17 @@ describe('torpor e maldição (a passiva da Súcubo)', () => {
 });
 
 describe('catálogo: Súcubo', () => {
-    it('a Súcubo de verdade põe torpor nos inimigos e o Tormento acerta todos', () => {
+    it('a Súcubo de verdade começa com a contagem de 3 nela', () => {
         const { state } = createBattle({
             teamA: [getCharacter('sucubo')],
             teamB: [getCharacter('cavaleiro'), getCharacter('sacerdote')],
             seed: 3,
         });
 
+        assert.ok(getUnit(state, 'A1').statuses.some((item) => item.kind === 'countdown' && item.turns === 3));
+
         for (const unit of state.units.filter((item) => item.team === 'B')) {
-            assert.ok(unit.statuses.some((item) => item.kind === 'drowsy' && item.turns === 3));
+            assert.ok(!unit.statuses.some((item) => item.kind === 'drowsy'));
         }
     });
 });

@@ -1197,9 +1197,9 @@ export const CHARACTERS: CharacterDefinition[] = [
                 id: 'sucubo.torpor',
                 name: 'Torpor',
                 description:
-                    'Quando a batalha começa, todos os inimigos recebem Torpor por 3 turnos (a purificação tira). Quem ainda tiver o Torpor quando ele acabar adormece. Quando a Súcubo golpeia um inimigo adormecido, ele recebe a Maldição para sempre (dano por vez de 40% do ataque dela; a purificação não tira).',
+                    'Quando a batalha começa, a Súcubo inicia uma contagem de 3 turnos. No começo do 3º turno dela, todos os inimigos adormecem (a purificação tira o sono). Quando a Súcubo golpeia um inimigo adormecido, ele recebe a Maldição para sempre (dano por vez de 40% do ataque dela; a purificação não tira).',
                 element: 'shadow',
-                effect: { type: 'battle_start', target: 'all-enemies', effects: [{ type: 'status', status: 'drowsy', turns: 3, power: 0 }] },
+                effect: { type: 'countdown', turns: 3, target: 'all-enemies', effects: [{ type: 'status', status: 'sleep', turns: 1, power: 0 }] },
                 also: [{ type: 'status_on_hit', status: 'curse', turns: 1, power: 0.4, permanent: true, when: { type: 'target_has_status', statuses: ['sleep'] } }],
             },
         ],

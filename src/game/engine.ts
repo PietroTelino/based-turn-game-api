@@ -308,6 +308,7 @@ function getHitModifiers(state: BattleState, attacker: BattleUnit, target?: Batt
             case 'battle_start':
             case 'turn_start':
             case 'energy_when_empty':
+            case 'countdown':
             // O bônus de time é contado logo abaixo, junto com o dos aliados.
             case 'team_damage_bonus':
                 break;
@@ -830,8 +831,12 @@ export function surrender(current: BattleState, team: TeamId): BattleResult {
     return { state, events };
 }
 
+/**
+ * A habilidade pede que o jogador escolha o alvo. No cadáver também: com mais
+ * de um aliado caído, ele escolhe qual erguer ou trazer de volta.
+ */
 function requiresTarget(skill: SkillDefinition): boolean {
-    return skill.target === 'single-enemy' || skill.target === 'single-ally';
+    return skill.target === 'single-enemy' || skill.target === 'single-ally' || skill.target === 'corpse';
 }
 
 /**
@@ -868,9 +873,9 @@ function getCandidateTargets(state: BattleState, actor: BattleUnit, skill: Skill
             return state.units.filter((u) => u.team === actor.team && isAlive(u));
         case 'self':
             return [actor];
-        // Um cadáver por vez: o primeiro aliado derrotado que ainda não foi erguido.
+        // Os aliados derrotados que ainda não foram erguidos: o jogador escolhe um deles.
         case 'corpse':
-            return state.units.filter((u) => u.team === actor.team && isCorpse(u)).slice(0, 1);
+            return state.units.filter((u) => u.team === actor.team && isCorpse(u));
     }
 }
 
@@ -895,6 +900,12 @@ function resolveTargets(
 
     if (!requiresTarget(skill)) {
         return candidates;
+    }
+
+    // Cadáver sem alvo escolhido (pedidos de antes da escolha, ou batalhas
+    // gravadas assim): vale o primeiro, como era.
+    if (targetId === undefined && skill.target === 'corpse') {
+        return candidates.slice(0, 1);
     }
 
     if (targetId === undefined) {
@@ -1645,6 +1656,16 @@ function applyBattleStartPassives(state: BattleState, events: BattleEvent[]): vo
         const unit = getUnit(state, unitId);
 
         for (const { passive, effect } of getPassiveEffects(unit)) {
+            // A contagem fica na própria unidade, à vista de todos.
+            if (effect.type === 'countdown' && isAlive(unit)) {
+                unit.statuses = [
+                    ...getStatuses(unit).filter((status) => status.kind !== 'countdown'),
+                    { kind: 'countdown', turns: effect.turns, value: 0, sourceId: unit.id, appliedOnStep: state.step },
+                ];
+                pushStatusesChanged(unit, events);
+                continue;
+            }
+
             if (effect.type !== 'battle_start' || !isAlive(unit)) {
                 continue;
             }
@@ -1661,6 +1682,38 @@ function applyBattleStartPassives(state: BattleState, events: BattleEvent[]): vo
                 for (const target of receiversOf(item, unit, targets)) {
                     applyEffect(state, unit, target, item, events);
                 }
+            }
+        }
+    }
+}
+
+/**
+ * A passiva `countdown` de `unit`: se a contagem dela está na última vez, o
+ * status sai e os efeitos atingem todos os inimigos vivos (uma vez só).
+ */
+function applyCountdown(state: BattleState, unit: BattleUnit, events: BattleEvent[]): void {
+    const countdown = getStatuses(unit).find((status) => status.kind === 'countdown');
+
+    if (!countdown || countdown.turns > 1) {
+        return;
+    }
+
+    unit.statuses = unit.statuses.filter((status) => status !== countdown);
+    events.push({ type: 'status_expired', unitId: unit.id, status: 'countdown' });
+    pushStatusesChanged(unit, events);
+
+    for (const { passive, effect } of getPassiveEffects(unit)) {
+        if (effect.type !== 'countdown') continue;
+
+        const targets = state.units.filter((enemy) => enemy.team !== unit.team && isAlive(enemy));
+
+        if (targets.length === 0) continue;
+
+        events.push({ type: 'passive_triggered', unitId: unit.id, passiveId: passive.id, targetIds: targets.map((target) => target.id) });
+
+        for (const item of effect.effects) {
+            for (const target of receiversOf(item, unit, targets)) {
+                applyEffect(state, unit, target, item, events);
             }
         }
     }
@@ -1849,6 +1902,9 @@ function activateNext(state: BattleState, events: BattleEvent[]): void {
 
             continue;
         }
+
+        // A contagem chegou ao fim: a passiva age agora, antes de tudo.
+        applyCountdown(state, unit, events);
 
         // Atordoada ou dormindo: perde a vez. O sono (que dura uma vez) acaba
         // aqui, no fim da vez perdida: a unidade acorda.

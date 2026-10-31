@@ -226,7 +226,7 @@ describe('Necromante: cadáveres', () => {
 
         assert.equal(option?.usable, false);
         assert.deepEqual(option?.targetIds, []);
-        assert.equal(option?.requiresTarget, false);
+        assert.equal(option?.requiresTarget, true);
         assertRuleError(() => use(state, 'erguer-esqueleto'), 'INVALID_TARGET');
     });
 });
@@ -462,7 +462,7 @@ describe('Necromante: IA', () => {
         assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'necromante.praga' });
 
         kill(state, 'A2');
-        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'necromante.erguer-esqueleto' });
+        assert.deepEqual(chooseAction(state), { unitId: 'A1', skillId: 'necromante.erguer-esqueleto', targetId: 'A2' });
 
         state.energy.A = 0;
         assert.equal(chooseAction(state).skillId, 'necromante.toque-da-morte');

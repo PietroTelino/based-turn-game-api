@@ -66,8 +66,11 @@ function decide(state: BattleState, useStance: boolean): BattleAction {
     // Invocação ou ressurreição: só aparece como utilizável quando há cadáver e energia.
     const summon = options.find((option) => option.skill.effects.some((effect) => effect.type === 'summon' || effect.type === 'revive'));
 
+    // Com mais de um caído, traz de volta o mais forte (maior ataque); para erguer um esqueleto, tanto faz qual.
     if (summon) {
-        return toAction(actor.id, summon, undefined);
+        const corpse = [...summon.targetIds].map((id) => getUnit(state, id)).sort((a, b) => b.stats.atk - a.stats.atk)[0];
+
+        return toAction(actor.id, summon, corpse?.id);
     }
 
     const shift = chooseForm(actor, options);

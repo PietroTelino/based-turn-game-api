@@ -227,6 +227,50 @@ describe('reviver', () => {
     it('a IA revive quando pode', () => {
         assert.equal(chooseAction(setup()).skillId, 'a.rise');
     });
+
+    describe('com mais de um aliado caído', () => {
+        function setupTwo() {
+            const state = createBattle({
+                teamA: [makeCharacter('a', { speed: 300 }, [rise]), makeCharacter('a2', { speed: 200, atk: 50 }), makeCharacter('a3', { speed: 100, atk: 300 })],
+                teamB: [makeCharacter('b', { speed: 10 })],
+                seed: 1,
+            }).state;
+
+            for (const id of ['A2', 'A3']) {
+                getUnit(state, id).hp = 0;
+                getUnit(state, id).statuses = [];
+            }
+
+            return state;
+        }
+
+        it('o jogador escolhe qual trazer de volta: todos os caídos são alvo', () => {
+            const state = setupTwo();
+            const option = getAvailableActions(state).find((a) => a.skill.id === 'a.rise');
+
+            assert.equal(option?.requiresTarget, true);
+            assert.deepEqual(option?.targetIds, ['A2', 'A3']);
+
+            const after = applyAction(state, { unitId: 'A1', skillId: 'a.rise', targetId: 'A3' }).state;
+
+            assert.equal(getUnit(after, 'A3').hp, 400);
+            assert.equal(getUnit(after, 'A2').hp, 0);
+        });
+
+        it('sem alvo escolhido (pedido antigo), vale o primeiro caído', () => {
+            const after = applyAction(setupTwo(), { unitId: 'A1', skillId: 'a.rise' }).state;
+
+            assert.equal(getUnit(after, 'A2').hp, 400);
+        });
+
+        it('quem está vivo não pode ser escolhido', () => {
+            assertRuleError(() => applyAction(setupTwo(), { unitId: 'A1', skillId: 'a.rise', targetId: 'A1' }), 'INVALID_TARGET');
+        });
+
+        it('a IA traz de volta o de maior ataque', () => {
+            assert.deepEqual(chooseAction(setupTwo()), { unitId: 'A1', skillId: 'a.rise', targetId: 'A3' });
+        });
+    });
 });
 
 describe('golpe que salta', () => {

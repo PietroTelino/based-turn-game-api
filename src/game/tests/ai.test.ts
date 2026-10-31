@@ -109,6 +109,9 @@ describe('catálogo de personagens', () => {
             } else if (effect.type === 'status_on_hit') {
                 // Status permanente não tem duração: a descrição diz que é para sempre.
                 numbers.push(percent(effect.power), effect.permanent ? 'para sempre' : `${effect.turns} turno`);
+            } else if (effect.type === 'countdown') {
+                // "No começo do 3º turno dela."
+                numbers.push(`${effect.turns}º turno`);
             } else if (effect.type === 'turn_start' || effect.type === 'battle_start') {
                 for (const item of effect.effects) {
                     if (item.type === 'cleanse' || item.type === 'dispel' || item.type === 'transform' || item.type === 'summon' || item.type === 'revive') continue;
