@@ -86,6 +86,9 @@
         "replayUnavailable": "O replay desta batalha não está disponível",
         "timeoutNotAllowed": "Não é possível pedir a vitória por tempo agora",
         "timeoutTooEarly": "O prazo do adversário ainda não acabou",
+        "invalidDifficulty": "Nível de dificuldade inválido: use easy, normal ou hard",
+        "unknownStage": "Fase da campanha desconhecida: {{stage}}",
+        "stageLocked": "Essa fase ainda está bloqueada: vença a fase anterior primeiro",
         "errorUnexpected": "Erro ao processar a batalha",
         "rules": {
             "INVALID_SETUP": "Configuração de batalha inválida",

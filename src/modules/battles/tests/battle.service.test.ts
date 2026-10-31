@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { ARENAS, CHARACTERS, FURY_DAMAGE_PER_TURN, FURY_START_TURN, GameRuleError, chooseAction, createBattle, getCharacter } from '../../../game';
+import { ARENAS, CAMPAIGN, CHARACTERS, FURY_DAMAGE_PER_TURN, FURY_START_TURN, GameRuleError, chooseAction, chooseAiAction, createBattle, getCharacter } from '../../../game';
 import type { BattleState, GameRuleErrorCode } from '../../../game';
 import { BattleError } from '../battle.errors';
 import type { BattleErrorCode } from '../battle.errors';
@@ -837,5 +837,130 @@ describe('BattleService: cenário', () => {
             [CHARACTERS[CHARACTERS.length - 1]?.id],
         );
         assert.equal(battle.state.arena, 'muralha');
+    });
+});
+
+describe('BattleService: nível da IA', () => {
+    it('sem nível, a batalha contra a IA é normal; o nível fica no estado, no registro e na listagem', async () => {
+        const { store, service } = setup();
+
+        const normal = await service.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], seed: 1 });
+        const hard = await service.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], seed: 1, difficulty: 'hard' });
+
+        assert.equal(normal.battle.state.difficulty, 'normal');
+        assert.equal(normal.battle.difficulty, 'normal');
+        assert.equal(hard.battle.state.difficulty, 'hard');
+        assert.equal((await store.findById(hard.battle.id))?.difficulty, 'hard');
+
+        const listed = await service.list(PLAYER);
+
+        assert.deepEqual(listed.map((item) => item.difficulty), ['hard', 'normal']);
+        assert.deepEqual(listed.map((item) => item.campaignStage), [null, null]);
+    });
+
+    it('no treino o nível não conta: a IA é a de treino', async () => {
+        const { service } = setup();
+
+        const { battle } = await service.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], seed: 1, training: true, difficulty: 'hard' });
+
+        assert.equal(battle.difficulty, null);
+        assert.equal(battle.state.difficulty, undefined);
+    });
+
+    it('a IA joga no nível da batalha', async () => {
+        const { store, service } = setup(TEAM_SIZE);
+
+        for (const difficulty of ['easy', 'normal', 'hard'] as const) {
+            // O time da IA é mais veloz: ela abre a batalha e a jogada dela vem na resposta.
+            const { battle, events } = await service.create(PLAYER, { team: FIVE, enemyTeam: ['harpia', 'ladino', 'vampiro', 'arqueiro', 'driade'], seed: 4, difficulty });
+            const initial = store.initialStates.get(battle.id)!;
+            const expected = chooseAiAction(initial);
+            const played = events.find((event) => event.type === 'skill_used');
+
+            assert.ok(played && played.type === 'skill_used', difficulty);
+            assert.equal(played.unitId, expected.unitId, difficulty);
+            assert.equal(played.skillId, expected.skillId, difficulty);
+        }
+    });
+});
+
+describe('BattleService: campanha', () => {
+    /** Encerra a batalha como se ela tivesse acabado com a vitória de `winner`. */
+    function finish(store: InMemoryBattleStore, id: string, winner: 'A' | 'B') {
+        store.patch(id, { status: 'finished', winner });
+    }
+
+    it('no começo só a fase 1 está aberta, e nada foi vencido', async () => {
+        const { service } = setup();
+
+        const stages = await service.campaign(PLAYER);
+
+        assert.deepEqual(
+            stages.map(({ stage, unlocked, clearedOn }) => ({ stage, unlocked, clearedOn })),
+            [
+                { stage: 1, unlocked: true, clearedOn: [] },
+                { stage: 2, unlocked: false, clearedOn: [] },
+            ],
+        );
+        assert.equal(stages[0]?.enemyTeam.length, TEAM_SIZE);
+    });
+
+    it('a fase tem o time inimigo e o cenário dela, e o time pedido é ignorado', async () => {
+        const { store, service } = setup();
+
+        const { battle } = await service.create(PLAYER, { team: ['cavaleiro'], enemyTeam: ['driade'], campaignStage: 1, difficulty: 'easy', seed: 1 });
+        const stage = CAMPAIGN[0]!;
+
+        assert.equal(battle.campaignStage, 1);
+        assert.equal(battle.state.campaignStage, 1);
+        assert.equal(battle.state.arena, stage.arena);
+        assert.deepEqual(battle.state.units.filter((unit) => unit.team === 'B').map((unit) => unit.characterId), stage.enemyTeam.slice(0, 1));
+        assert.equal((await store.findById(battle.id))?.campaignStage, 1);
+    });
+
+    it('a fase 2 só abre depois de vencer a 1, em qualquer nível; perder não abre', async () => {
+        const { store, service } = setup();
+
+        await rejectsWith(service.create(PLAYER, { team: ['cavaleiro'], campaignStage: 2 }), 'STAGE_LOCKED');
+
+        const lost = await service.create(PLAYER, { team: ['cavaleiro'], campaignStage: 1, difficulty: 'hard' });
+
+        finish(store, lost.battle.id, 'B');
+        await rejectsWith(service.create(PLAYER, { team: ['cavaleiro'], campaignStage: 2 }), 'STAGE_LOCKED');
+
+        const won = await service.create(PLAYER, { team: ['cavaleiro'], campaignStage: 1, difficulty: 'easy' });
+
+        finish(store, won.battle.id, 'A');
+
+        const stages = await service.campaign(PLAYER);
+
+        assert.deepEqual(stages.map((item) => item.unlocked), [true, true]);
+        assert.deepEqual(stages[0]?.clearedOn, ['easy']);
+
+        const second = await service.create(PLAYER, { team: ['cavaleiro'], campaignStage: 2 });
+
+        assert.equal(second.battle.state.arena, CAMPAIGN[1]!.arena);
+
+        // O progresso é de cada jogador.
+        assert.deepEqual((await service.campaign(OTHER_PLAYER)).map((item) => item.unlocked), [true, false]);
+    });
+
+    it('os níveis vencidos de uma fase aparecem em ordem, sem repetir', async () => {
+        const { store, service } = setup();
+
+        for (const difficulty of ['hard', 'easy', 'hard'] as const) {
+            const { battle } = await service.create(PLAYER, { team: ['cavaleiro'], campaignStage: 1, difficulty });
+
+            finish(store, battle.id, 'A');
+        }
+
+        assert.deepEqual((await service.campaign(PLAYER))[0]?.clearedOn, ['easy', 'hard']);
+    });
+
+    it('fase que não existe é recusada', async () => {
+        const { service } = setup();
+
+        await rejectsWith(service.create(PLAYER, { team: ['cavaleiro'], campaignStage: 99 }), 'UNKNOWN_STAGE');
+        await rejectsWith(service.create(PLAYER, { team: ['cavaleiro'], campaignStage: 0 }), 'UNKNOWN_STAGE');
     });
 });

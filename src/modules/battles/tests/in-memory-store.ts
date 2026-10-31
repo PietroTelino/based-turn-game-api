@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { BattleEvent, BattleState } from '../../../game';
-import type { BattlePick, BattleRecord, BattleSnapshot, BattleStore, BattleSummaryRow, NewBattle } from '../battle.types';
+import type { BattlePick, BattleRecord, BattleSnapshot, BattleStore, BattleSummaryRow, CampaignWin, NewBattle } from '../battle.types';
 
 /** Um personagem escolhido, como fica na tabela de escolhas. */
 export interface StoredPick extends BattlePick {
@@ -32,6 +32,8 @@ export class InMemoryBattleStore implements BattleStore {
             ranked: extra.ranked === true,
             ratingDeltaA: null,
             ratingDeltaB: null,
+            difficulty: extra.difficulty ?? null,
+            campaignStage: extra.campaignStage ?? null,
             createdAt: now,
             updatedAt: now,
         };
@@ -61,6 +63,21 @@ export class InMemoryBattleStore implements BattleStore {
             .reverse()
             .slice(0, limit)
             .map(({ state: _state, events: _events, ...summary }) => summary);
+    }
+
+    async findCampaignWins(userId: string): Promise<CampaignWin[]> {
+        const wins = new Map<string, CampaignWin>();
+
+        for (const record of this.rows.values()) {
+            if (record.userId !== userId || record.opponentId !== null || record.campaignStage === null) continue;
+            if (record.status !== 'finished' || record.winner !== 'A') continue;
+
+            const win = { stage: record.campaignStage, difficulty: record.difficulty ?? 'normal' };
+
+            wins.set(`${win.stage}:${win.difficulty}`, win);
+        }
+
+        return [...wins.values()];
     }
 
     async saveIfStep(id: string, expectedStep: number, snapshot: BattleSnapshot, events: BattleEvent[]): Promise<BattleRecord | null> {

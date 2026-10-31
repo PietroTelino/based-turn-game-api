@@ -503,9 +503,20 @@ export interface BattleState {
      * o mesmo. Batalhas criadas antes de haver cenários não têm (vale a muralha).
      */
     arena?: ArenaId;
+    /**
+     * Contra a IA: o quanto ela joga bem (veja ai.ts). O motor não usa; quem lê
+     * é quem escolhe as jogadas da IA. Sem o campo (as batalhas de antes da
+     * escolha de dificuldade, e entre jogadores), vale 'normal'.
+     */
+    difficulty?: AiDifficulty;
+    /** Batalha da campanha: a fase (1, 2...). O motor não usa: é para a tela e para o progresso do jogador. */
+    campaignStage?: number;
     /** Estado do gerador de números aleatórios (ver rng.ts). */
     rngState: number;
 }
+
+/** O nível da IA. A lista em ordem fica em AI_DIFFICULTIES (constants.ts). */
+export type AiDifficulty = 'easy' | 'normal' | 'hard';
 
 /** Os cenários onde a batalha acontece. A lista em ordem fica em ARENAS (constants.ts). */
 export type ArenaId = 'muralha' | 'floresta' | 'lago-gelado';

@@ -126,6 +126,13 @@ model Battle {
     ratingDeltaA  Int?    @map("rating_delta_a")
     ratingDeltaB  Int?    @map("rating_delta_b")
 
+    // Contra a IA: o nível dela ("easy" | "normal" | "hard"). Vazio entre jogadores, no treino e
+    // nas batalhas de antes da escolha de nível.
+    difficulty    String?
+    // Batalha da campanha: a fase (1, 2...). Vazio nas outras. Com o vencedor, diz até onde o
+    // jogador já chegou na campanha.
+    campaignStage Int?    @map("campaign_stage")
+
     picks       BattlePick[]
 
     createdAt   DateTime  @default(now()) @map("created_at")
@@ -135,6 +142,7 @@ model Battle {
     @@map("battles")
     @@index([userId, createdAt])
     @@index([opponentId, createdAt])
+    @@index([userId, campaignStage])
 }
 
 // Um personagem que um jogador levou para uma batalha. É daqui que saem as estatísticas de

@@ -1,4 +1,4 @@
-import type { AvailableAction, BattleEvent, BattleState, TeamId } from '../../game';
+import type { AiDifficulty, ArenaId, AvailableAction, BattleEvent, BattleState, TeamId } from '../../game';
 
 export type BattleStatus = 'in_progress' | 'finished';
 
@@ -35,6 +35,10 @@ export interface NewBattle {
     ranked?: boolean;
     /** Os personagens que cada jogador escolheu. Vazio na batalha de treino. */
     picks: BattlePick[];
+    /** Contra a IA: o nível dela. */
+    difficulty?: AiDifficulty;
+    /** Batalha da campanha: a fase. */
+    campaignStage?: number;
 }
 
 /** Uma batalha como está guardada no banco. */
@@ -58,6 +62,10 @@ export interface BattleRecord extends BattleSnapshot {
     /** Os pontos que cada lado ganhou ou perdeu. `null` até o resultado ser lançado. */
     ratingDeltaA: number | null;
     ratingDeltaB: number | null;
+    /** Contra a IA: o nível dela. `null` entre jogadores, no treino e nas batalhas de antes da escolha de nível. */
+    difficulty: AiDifficulty | null;
+    /** Batalha da campanha: a fase. `null` nas outras. */
+    campaignStage: number | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -85,12 +93,32 @@ export interface BattleStore {
     findInitialState(id: string): Promise<BattleState | null>;
     /** As batalhas em que o jogador está, de qualquer lado, da mais nova para a mais antiga. */
     findManyByUser(userId: string, limit: number): Promise<BattleSummaryRow[]>;
+    /** As fases da campanha que o jogador já venceu, e em que nível (uma linha por vitória). */
+    findCampaignWins(userId: string): Promise<CampaignWin[]>;
     /**
      * Grava só se a batalha ainda estiver em andamento e na vez esperada.
      * Devolve null quando outra requisição gravou antes. `events` passa a ser
      * o histórico inteiro da batalha.
      */
     saveIfStep(id: string, expectedStep: number, snapshot: BattleSnapshot, events: BattleEvent[]): Promise<BattleRecord | null>;
+}
+
+/** Uma vitória na campanha. */
+export interface CampaignWin {
+    stage: number;
+    difficulty: AiDifficulty;
+}
+
+/** Uma fase da campanha como o jogador a vê: contra quem, onde e se ele já pode jogar ou já venceu. */
+export interface CampaignStageView {
+    stage: number;
+    key: string;
+    arena: ArenaId;
+    enemyTeam: string[];
+    /** Dá para jogar: é a primeira fase ou a anterior já foi vencida. */
+    unlocked: boolean;
+    /** Os níveis em que o jogador já venceu esta fase, do mais fácil ao mais difícil. */
+    clearedOn: AiDifficulty[];
 }
 
 /**
@@ -122,6 +150,10 @@ export interface BattleView {
     ranked: boolean;
     /** Partida ranqueada encerrada: os pontos que o jogador ganhou (ou perdeu, negativo). */
     ratingChange: number | null;
+    /** Contra a IA: o nível dela (`null` entre jogadores e no treino). */
+    difficulty: AiDifficulty | null;
+    /** Batalha da campanha: a fase. */
+    campaignStage: number | null;
     /**
      * Partida ranqueada em andamento: quanto tempo quem está na vez ainda tem
      * para jogar, em ms. Em zero, o outro lado pode pedir a vitória. `null`

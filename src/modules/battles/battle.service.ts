@@ -1,17 +1,19 @@
 import {
+    AI_DIFFICULTIES,
     ARENAS,
+    CAMPAIGN,
     CHARACTERS,
     applyAction,
-    chooseAction,
-    chooseTrainingAction,
+    chooseAiAction,
     createBattle,
+    getCampaignStage,
     getActiveUnit,
     getAvailableActions,
     getFuryBonus,
     surrender,
     upgradeState,
 } from '../../game';
-import type { ArenaId, BattleAction, BattleEvent, BattleResult, BattleState, CharacterDefinition, TeamId } from '../../game';
+import type { AiDifficulty, ArenaId, BattleAction, BattleEvent, BattleResult, BattleState, CharacterDefinition, TeamId } from '../../game';
 import { BattleError } from './battle.errors';
 import type {
     BattlePick,
@@ -21,6 +23,7 @@ import type {
     BattleStore,
     BattleSummary,
     BattleView,
+    CampaignStageView,
     PublicBattleState,
     ReplayResponse,
 } from './battle.types';
@@ -68,8 +71,15 @@ export interface CreateBattleInput {
     enemyTeam?: string[];
     /** Semente do motor. Só os testes usam; a rota HTTP não aceita. */
     seed?: number;
-    /** Batalha de treino (o tutorial): a IA joga fraco de propósito. */
+    /** Batalha de treino (o tutorial): a IA joga fraco de propósito, e o nível não conta. */
     training?: boolean;
+    /** O nível da IA. Sem ele, 'normal'. */
+    difficulty?: AiDifficulty;
+    /**
+     * Uma fase da campanha: o time inimigo e o cenário são os da fase (o
+     * `enemyTeam` é ignorado). A fase precisa estar aberta para o jogador.
+     */
+    campaignStage?: number;
 }
 
 /**
@@ -135,9 +145,30 @@ export class BattleService {
         });
     }
 
+    /** A campanha como o jogador a vê: cada fase, se já abriu e em que níveis ele já venceu. */
+    async campaign(userId: string): Promise<CampaignStageView[]> {
+        const wins = await this.store.findCampaignWins(userId);
+
+        return CAMPAIGN.map((stage) => ({
+            stage: stage.stage,
+            key: stage.key,
+            arena: stage.arena,
+            enemyTeam: [...stage.enemyTeam],
+            unlocked: stage.stage === 1 || wins.some((win) => win.stage === stage.stage - 1),
+            clearedOn: AI_DIFFICULTIES.filter((difficulty) => wins.some((win) => win.stage === stage.stage && win.difficulty === difficulty)),
+        }));
+    }
+
     async create(userId: string, input: CreateBattleInput): Promise<BattleResponse> {
         const teamA = this.resolveTeam(input.team);
-        const teamB = input.enemyTeam ? this.resolveTeam(input.enemyTeam) : this.pickEnemyTeam(teamA.length);
+        const stage = input.campaignStage !== undefined ? await this.openStage(userId, input.campaignStage) : undefined;
+        // A fase tem o time dela. Nos testes de 1 contra 1, entram só os primeiros.
+        const teamB = stage
+            ? this.resolveTeam(stage.enemyTeam.slice(0, this.teamSize))
+            : input.enemyTeam
+              ? this.resolveTeam(input.enemyTeam)
+              : this.pickEnemyTeam(teamA.length);
+        const difficulty = input.training ? undefined : (input.difficulty ?? 'normal');
 
         const started = createBattle({
             teamA,
@@ -151,8 +182,18 @@ export class BattleService {
             started.state.training = true;
         }
 
+        // O nível fica no estado: é por ele que, em cada jogada, a IA sabe como jogar.
+        if (difficulty) {
+            started.state.difficulty = difficulty;
+        }
+
+        if (stage) {
+            started.state.campaignStage = stage.stage;
+        }
+
         // O cenário é sorteado depois do time da IA, para não mudar o time que sai de um mesmo sorteio.
-        started.state.arena = this.pickArena();
+        // A fase da campanha tem o seu.
+        started.state.arena = stage ? stage.arena : this.pickArena();
 
         // Se as unidades da IA forem as primeiras da ordem, ela já abre a batalha.
         const { state, events } = this.playAiActions(started);
@@ -161,6 +202,8 @@ export class BattleService {
             initialState: started.state,
             // O treino tem sempre o mesmo time: não é escolha do jogador e não entra nas estatísticas.
             picks: input.training ? [] : picksOf(userId, teamA),
+            ...(difficulty && { difficulty }),
+            ...(stage && { campaignStage: stage.stage }),
         });
 
         return { battle: this.toView(record, PLAYER_TEAM), events };
@@ -192,6 +235,25 @@ export class BattleService {
         });
 
         return record.id;
+    }
+
+    /** A fase pedida, se existe e o jogador já pode jogá-la (a anterior foi vencida). */
+    private async openStage(userId: string, number: number) {
+        const stage = getCampaignStage(number);
+
+        if (!stage) {
+            throw new BattleError('UNKNOWN_STAGE', 400, 'battle.unknownStage', { stage: String(number) });
+        }
+
+        if (stage.stage > 1) {
+            const wins = await this.store.findCampaignWins(userId);
+
+            if (!wins.some((win) => win.stage === stage.stage - 1)) {
+                throw new BattleError('STAGE_LOCKED', 403, 'battle.stageLocked');
+            }
+        }
+
+        return stage;
     }
 
     /** `true` enquanto a batalha existe e ainda não acabou. A fila ranqueada usa para saber se o jogador está ocupado. */
@@ -346,6 +408,8 @@ export class BattleService {
             hasReplay: record.hasReplay,
             ranked: record.ranked,
             ratingChange: team === 'A' ? record.ratingDeltaA : record.ratingDeltaB,
+            difficulty: record.difficulty,
+            campaignStage: record.campaignStage,
             turnTimeLeftMs: hasDeadline ? this.turnTimeLeft(record) : null,
             createdAt: record.createdAt,
             updatedAt: record.updatedAt,
@@ -417,7 +481,8 @@ export class BattleService {
                 return { state, events };
             }
 
-            const result = applyAction(state, state.training ? chooseTrainingAction(state) : chooseAction(state));
+            // O treino e o nível da batalha ficam no estado: chooseAiAction lê dali como jogar.
+            const result = applyAction(state, chooseAiAction(state));
 
             state = result.state;
             events.push(...result.events);

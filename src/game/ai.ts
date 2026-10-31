@@ -1,4 +1,5 @@
 import {
+    applyAction,
     calculateHeal,
     DAMAGE_STATUSES,
     getAvailableActions,
@@ -8,11 +9,37 @@ import {
     getStatusTickDamage,
     getUnit,
     hasStatus,
+    isAlive,
     NEGATIVE_STATUSES,
     POSITIVE_STATUSES,
     SKIP_STATUSES,
 } from './engine';
-import type { AvailableAction, BattleAction, BattleState, BattleUnit } from './types';
+import type { AiDifficulty, AvailableAction, BattleAction, BattleState, BattleUnit, TeamId } from './types';
+
+/**
+ * A jogada da IA na batalha, conforme o nível dela: a de treino (o tutorial)
+ * e a fácil jogam fraco de propósito, a normal é a de sempre e a difícil
+ * pensa cada golpe. Quem chama não precisa saber qual é qual.
+ */
+export function chooseAiAction(state: BattleState): BattleAction {
+    if (state.training) {
+        return chooseTrainingAction(state);
+    }
+
+    return chooseActionFor(state, state.difficulty ?? 'normal');
+}
+
+/** A jogada de um nível específico, sem olhar o que está gravado no estado. */
+export function chooseActionFor(state: BattleState, difficulty: AiDifficulty): BattleAction {
+    switch (difficulty) {
+        case 'easy':
+            return chooseEasyAction(state);
+        case 'hard':
+            return chooseHardAction(state);
+        default:
+            return chooseAction(state);
+    }
+}
 
 /**
  * IA simples e previsível, sem sorteio:
@@ -168,6 +195,134 @@ export function chooseTrainingAction(state: BattleState): BattleAction {
 
     // Cura e suporte, ou golpe em área: como a IA normal escolheu.
     return option.skill.id === normal.skillId ? normal : toAction(actor.id, option, option.targetIds[0]);
+}
+
+/**
+ * IA fácil: a mesma da batalha de treino, mas aqui contra qualquer time. Só
+ * gasta energia uma vez por turno, espalha os golpes em quem tem mais vida e
+ * não entra em postura. Dá para vencer mesmo errando bastante.
+ */
+export function chooseEasyAction(state: BattleState): BattleAction {
+    return chooseTrainingAction(state);
+}
+
+/**
+ * IA difícil: pensa antes de jogar. Para cada jogada possível da unidade da
+ * vez (cada habilidade em cada alvo), ela imagina como a batalha segue: faz a
+ * jogada numa cópia do campo e deixa os dois times jogarem mais algumas vezes
+ * como a IA normal jogaria. No fim, olha quem ficou melhor (veja `evaluate`)
+ * e escolhe a jogada que levou ao melhor campo, na média de alguns futuros.
+ *
+ * Ela não espia a sorte da batalha: cada futuro imaginado usa um sorteio
+ * próprio, então os críticos e chances dela são tão incertos quanto os do
+ * jogador. No empate, fica com o que a IA normal faria.
+ */
+export function chooseHardAction(state: BattleState): BattleAction {
+    if (state.activeUnitId === null) {
+        throw new Error('A batalha já terminou');
+    }
+
+    const actor = getUnit(state, state.activeUnitId);
+    const normal = decide(state, true);
+    let best = { action: normal, score: imagine(state, normal, actor.team) };
+
+    for (const action of candidates(state, actor)) {
+        if (sameAction(action, normal)) continue;
+
+        const score = imagine(state, action, actor.team);
+
+        if (score > best.score) {
+            best = { action, score };
+        }
+    }
+
+    return best.action;
+}
+
+/** Quantas vezes a IA difícil deixa a batalha seguir, depois da jogada, antes de olhar o resultado. */
+const HARD_LOOKAHEAD = 12;
+
+/** Quantos futuros diferentes ela imagina para cada jogada (cada um com um sorteio próprio). */
+const HARD_FUTURES = 3;
+
+/** Todas as jogadas que a unidade da vez pode fazer: cada habilidade utilizável, em cada alvo possível. */
+function candidates(state: BattleState, actor: BattleUnit): BattleAction[] {
+    const actions: BattleAction[] = [];
+
+    for (const option of getAvailableActions(state, { previews: false }).filter((item) => item.usable)) {
+        if (option.requiresTarget) {
+            for (const targetId of option.targetIds) actions.push({ unitId: actor.id, skillId: option.skill.id, targetId });
+        } else {
+            actions.push({ unitId: actor.id, skillId: option.skill.id });
+        }
+    }
+
+    return actions;
+}
+
+function sameAction(a: BattleAction, b: BattleAction): boolean {
+    return a.skillId === b.skillId && a.targetId === b.targetId;
+}
+
+/** A nota média do campo depois de `action`, vista por `team`, em alguns futuros imaginados. */
+function imagine(state: BattleState, action: BattleAction, team: TeamId): number {
+    let total = 0;
+
+    for (let future = 0; future < HARD_FUTURES; future++) {
+        // Um sorteio que não é o da batalha: a IA não sabe quais golpes vão ser críticos.
+        let sim: BattleState = { ...state, rngState: (state.rngState ^ Math.imul(future + 1, 0x9e3779b1)) >>> 0 };
+
+        sim = applyAction(sim, action).state;
+
+        for (let step = 0; step < HARD_LOOKAHEAD && sim.winner === null; step++) {
+            sim = applyAction(sim, decide(sim, true)).state;
+        }
+
+        total += evaluate(sim, team);
+    }
+
+    return total / HARD_FUTURES;
+}
+
+/**
+ * Quão bem `team` está: o perigo de cada unidade viva (veja `threat`), meio
+ * pela presença e meio pela vida que ainda tem, do time menos o do adversário,
+ * e um pouco pela energia guardada. Vencer vale mais que qualquer campo.
+ */
+function evaluate(state: BattleState, team: TeamId): number {
+    if (state.winner !== null) {
+        return state.winner === team ? 1e9 : -1e9;
+    }
+
+    let score = 0;
+
+    for (const unit of state.units) {
+        if (!isAlive(unit)) continue;
+
+        const value = threat(unit) * (0.5 + 0.5 * hpRatio(unit));
+
+        score += unit.team === team ? value : -value;
+    }
+
+    const other: TeamId = team === 'A' ? 'B' : 'A';
+
+    return score + ENERGY_VALUE * (state.energy[team] - state.energy[other]);
+}
+
+/** Quanto vale um ponto de energia guardado, na mesma escala de `threat`. */
+const ENERGY_VALUE = 20;
+
+/** Quem cura, purifica ou revive vale este tanto a mais: tirá-lo cedo muda a batalha. */
+const SUPPORT_THREAT_BONUS = 0.35;
+
+/** Quanto uma unidade pesa na batalha: o dano esperado por golpe, mais rápido valendo mais, e um bônus para quem cura ou revive. */
+function threat(unit: BattleUnit): number {
+    const stats = getEffectiveStats(unit);
+    const perHit = stats.atk * (1 + stats.critChance * (stats.critDamage - 1));
+    const support = unit.skills.some((skill) => skill.effects.some((effect) => effect.type === 'heal' || effect.type === 'revive' || effect.type === 'cleanse'));
+    const toughness = stats.maxHp / 800;
+
+    return perHit * (1 + stats.speed / 400) * toughness * (support ? 1 + SUPPORT_THREAT_BONUS : 1);
 }
 
 function isHeal(option: AvailableAction): boolean {

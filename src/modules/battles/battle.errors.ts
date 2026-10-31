@@ -7,7 +7,10 @@ export type BattleErrorCode =
     | 'BATTLE_CONFLICT'
     | 'REPLAY_UNAVAILABLE'
     | 'TIMEOUT_NOT_ALLOWED'
-    | 'TIMEOUT_TOO_EARLY';
+    | 'TIMEOUT_TOO_EARLY'
+    | 'INVALID_DIFFICULTY'
+    | 'UNKNOWN_STAGE'
+    | 'STAGE_LOCKED';
 
 /**
  * Erros do módulo de batalhas que não são regra do jogo (esses são GameRuleError).

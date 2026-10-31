@@ -1,7 +1,7 @@
 import { prisma } from '../../prisma';
 import type { Battle, Prisma } from '../../generated/prisma/client';
-import type { BattleEvent, BattleState, TeamId } from '../../game';
-import type { BattleRecord, BattleSnapshot, BattleStatus, BattleStore, BattleSummaryRow, NewBattle } from './battle.types';
+import type { AiDifficulty, BattleEvent, BattleState, TeamId } from '../../game';
+import type { BattleRecord, BattleSnapshot, BattleStatus, BattleStore, BattleSummaryRow, CampaignWin, NewBattle } from './battle.types';
 
 /** Tudo menos os estados e o histórico, que são grandes e a listagem não usa. */
 const SUMMARY_FIELDS = {
@@ -16,6 +16,8 @@ const SUMMARY_FIELDS = {
     ranked: true,
     ratingDeltaA: true,
     ratingDeltaB: true,
+    difficulty: true,
+    campaignStage: true,
     createdAt: true,
     updatedAt: true,
     finishedAt: true,
@@ -40,6 +42,8 @@ function toSummary(row: SummaryRow): BattleSummaryRow {
         ranked: row.ranked,
         ratingDeltaA: row.ratingDeltaA,
         ratingDeltaB: row.ratingDeltaB,
+        difficulty: row.difficulty as AiDifficulty | null,
+        campaignStage: row.campaignStage,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         finishedAt: row.finishedAt,
@@ -82,6 +86,8 @@ export class BattleRepository implements BattleStore {
                 initialState: toJson(extra.initialState),
                 hasReplay: true,
                 ranked: extra.ranked === true,
+                difficulty: extra.difficulty ?? null,
+                campaignStage: extra.campaignStage ?? null,
                 // Os personagens escolhidos entram junto com a batalha, na mesma gravação.
                 picks: { create: extra.picks.map((pick) => ({ userId: pick.userId, characterId: pick.characterId })) },
             },
@@ -112,6 +118,17 @@ export class BattleRepository implements BattleStore {
         });
 
         return rows.map(toSummary);
+    }
+
+    async findCampaignWins(userId: string): Promise<CampaignWin[]> {
+        // Só as vencidas pelo jogador: contra a IA, ele é sempre o time A.
+        const rows = await prisma.battle.findMany({
+            where: { userId, opponentId: null, campaignStage: { not: null }, status: 'finished', winner: 'A' },
+            distinct: ['campaignStage', 'difficulty'],
+            select: { campaignStage: true, difficulty: true },
+        });
+
+        return rows.map((row) => ({ stage: row.campaignStage ?? 0, difficulty: (row.difficulty ?? 'normal') as AiDifficulty }));
     }
 
     async saveIfStep(id: string, expectedStep: number, snapshot: BattleSnapshot, events: BattleEvent[]): Promise<BattleRecord | null> {

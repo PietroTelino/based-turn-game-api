@@ -1,4 +1,4 @@
-import type { ArenaId } from './types';
+import type { AiDifficulty, ArenaId } from './types';
 
 /** Números que definem o ritmo do jogo. Mexer aqui é balancear. */
 
@@ -38,3 +38,6 @@ export const SLEEP_DAMAGE_BONUS = 0.5;
 
 /** Os cenários possíveis. Cada batalha nova sorteia um deles. */
 export const ARENAS: readonly ArenaId[] = ['muralha', 'floresta', 'lago-gelado'];
+
+/** Os níveis da IA, do mais fácil ao mais difícil. */
+export const AI_DIFFICULTIES: readonly AiDifficulty[] = ['easy', 'normal', 'hard'];

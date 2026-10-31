@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { GameRuleError } from '../../game';
-import type { BattleAction } from '../../game';
+import { AI_DIFFICULTIES, GameRuleError } from '../../game';
+import type { AiDifficulty, BattleAction } from '../../game';
 import { BattleError } from './battle.errors';
 import type { BattleService } from './battle.service';
 
@@ -8,11 +8,28 @@ function isStringArray(value: unknown): value is string[] {
     return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
+function isDifficulty(value: unknown): value is AiDifficulty {
+    return typeof value === 'string' && (AI_DIFFICULTIES as readonly string[]).includes(value);
+}
+
 export class BattleController {
     constructor(private service: BattleService) {}
 
     listCharacters = async (_req: Request, res: Response) => {
         return res.json(this.service.listCharacters());
+    };
+
+    /** GET /campaign — as fases da campanha, com o que o jogador já abriu e venceu. */
+    campaign = async (req: Request, res: Response) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
+            }
+
+            return res.json(await this.service.campaign(req.user.id));
+        } catch (error) {
+            return this.handleError(req, res, error);
+        }
     };
 
     list = async (req: Request, res: Response) => {
@@ -33,10 +50,18 @@ export class BattleController {
                 return res.status(401).json({ message: req.t('auth.notAuthenticated') });
             }
 
-            const { team, enemyTeam, training } = req.body ?? {};
+            const { team, enemyTeam, training, difficulty, campaignStage } = req.body ?? {};
 
             if (!isStringArray(team) || (enemyTeam !== undefined && !isStringArray(enemyTeam))) {
                 throw new BattleError('INVALID_TEAM', 400, 'battle.teamRequired');
+            }
+
+            if (difficulty !== undefined && !isDifficulty(difficulty)) {
+                throw new BattleError('INVALID_DIFFICULTY', 400, 'battle.invalidDifficulty');
+            }
+
+            if (campaignStage !== undefined && !Number.isInteger(campaignStage)) {
+                throw new BattleError('UNKNOWN_STAGE', 400, 'battle.unknownStage', { stage: String(campaignStage) });
             }
 
             const result = await this.service.create(req.user.id, {
@@ -44,6 +69,8 @@ export class BattleController {
                 ...(enemyTeam !== undefined && { enemyTeam }),
                 // Só `true` liga o treino; qualquer outra coisa é batalha normal.
                 ...(training === true && { training: true }),
+                ...(difficulty !== undefined && { difficulty }),
+                ...(campaignStage !== undefined && { campaignStage: campaignStage as number }),
             });
 
             return res.status(201).json(result);

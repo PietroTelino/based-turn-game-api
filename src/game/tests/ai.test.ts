@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { chooseAction, chooseTrainingAction } from '../ai';
+import { chooseAction, chooseActionFor, chooseAiAction, chooseEasyAction, chooseHardAction, chooseTrainingAction } from '../ai';
 import { CHARACTERS, getCharacter } from '../data/characters';
 import { applyAction, createBattle, getUnit } from '../engine';
+import type { AiDifficulty } from '../types';
 
 /**
  * Cada conjunto de habilidades e passivas do catálogo: o de cada personagem,
@@ -434,5 +435,65 @@ describe('IA', () => {
                 }
             }
         }
+    });
+});
+
+describe('níveis da IA', () => {
+    const teamA = ['cavaleiro', 'piromante', 'sacerdote', 'ladino', 'arqueiro'].map(getCharacter);
+    const teamB = ['barbaro', 'criomante', 'driade', 'vampiro', 'guardiao'].map(getCharacter);
+
+    /** Joga a batalha inteira: o time A no nível `a`, o B no `b`. Devolve quem venceu. */
+    function play(a: AiDifficulty, b: AiDifficulty, seed: number, first = teamA, second = teamB): string | null {
+        let { state } = createBattle({ teamA: first, teamB: second, seed });
+
+        for (let i = 0; state.winner === null && i < 3000; i++) {
+            const actor = getUnit(state, state.activeUnitId ?? '');
+
+            state = applyAction(state, chooseActionFor(state, actor.team === 'A' ? a : b)).state;
+        }
+
+        return state.winner;
+    }
+
+    it('a jogada segue o que está no estado: treino, fácil, normal (também sem nível) e difícil', () => {
+        const { state } = createBattle({ teamA, teamB, seed: 3 });
+
+        assert.deepEqual(chooseAiAction(state), chooseAction(state));
+        assert.deepEqual(chooseAiAction({ ...state, difficulty: 'normal' }), chooseAction(state));
+        assert.deepEqual(chooseAiAction({ ...state, difficulty: 'easy' }), chooseEasyAction(state));
+        assert.deepEqual(chooseAiAction({ ...state, difficulty: 'hard' }), chooseHardAction(state));
+        // O treino manda mais que o nível.
+        assert.deepEqual(chooseAiAction({ ...state, difficulty: 'hard', training: true }), chooseTrainingAction(state));
+    });
+
+    it('a difícil pensa numa cópia: não muda a batalha e, no mesmo campo, faz sempre a mesma jogada', () => {
+        const { state } = createBattle({ teamA, teamB, seed: 5 });
+        const before = structuredClone(state);
+        const first = chooseHardAction(state);
+
+        assert.deepEqual(state, before);
+        assert.deepEqual(chooseHardAction(state), first);
+    });
+
+    it('a difícil vence a normal na maioria das batalhas, dos dois lados do campo', () => {
+        let wins = 0;
+
+        for (const seed of [1, 2, 3]) {
+            if (play('hard', 'normal', seed) === 'A') wins++;
+            if (play('normal', 'hard', seed, teamB, teamA) === 'B') wins++;
+        }
+
+        assert.ok(wins >= 4, `venceu ${wins} de 6`);
+    });
+
+    it('a fácil perde para a normal na maioria das batalhas, dos dois lados do campo', () => {
+        let wins = 0;
+
+        for (const seed of [1, 2, 3]) {
+            if (play('easy', 'normal', seed) === 'A') wins++;
+            if (play('normal', 'easy', seed, teamB, teamA) === 'B') wins++;
+        }
+
+        assert.ok(wins <= 2, `venceu ${wins} de 6`);
     });
 });

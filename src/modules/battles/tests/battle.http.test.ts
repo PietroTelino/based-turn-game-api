@@ -173,6 +173,33 @@ describe('rotas /api/battles', () => {
         assert.deepEqual([noSkill.status, noSkill.body.code], [400, 'INVALID_ACTION']);
     });
 
+    it('nível e fase: o nível precisa ser easy, normal ou hard, e a fase precisa existir e estar aberta', async () => {
+        const badLevel = await call('POST', '/', { token: player, body: { team: ['barbaro'], difficulty: 'impossivel' } });
+        const badStage = await call('POST', '/', { token: player, body: { team: ['barbaro'], campaignStage: 'um' } });
+        const locked = await call('POST', '/', { token: otherPlayer, body: { team: ['barbaro'], campaignStage: 2 } });
+        const hard = await call('POST', '/', { token: player, body: { team: ['barbaro'], difficulty: 'hard', campaignStage: 1 } });
+
+        assert.deepEqual([badLevel.status, badLevel.body.code], [400, 'INVALID_DIFFICULTY']);
+        assert.deepEqual([badStage.status, badStage.body.code], [400, 'UNKNOWN_STAGE']);
+        assert.deepEqual(locked.body, { code: 'STAGE_LOCKED', message: 'Essa fase ainda está bloqueada: vença a fase anterior primeiro' });
+        assert.equal(locked.status, 403);
+        assert.equal(hard.status, 201);
+        assert.deepEqual([hard.body.battle.difficulty, hard.body.battle.campaignStage], ['hard', 1]);
+    });
+
+    it('GET /campaign devolve as fases com o que o jogador já abriu', async () => {
+        const { status, body } = await call('GET', '/campaign', { token: otherPlayer });
+
+        assert.equal(status, 200);
+        assert.deepEqual(
+            body.map((stage: { stage: number; unlocked: boolean }) => [stage.stage, stage.unlocked]),
+            [
+                [1, true],
+                [2, false],
+            ],
+        );
+    });
+
     it('regra do jogo quebrada responde 400 com a mensagem no idioma pedido', async () => {
         const created = await call('POST', '/', { token: player, body: { team: ['barbaro'], enemyTeam: ['cavaleiro'] } });
         const path = `/${created.body.battle.id}/actions`;

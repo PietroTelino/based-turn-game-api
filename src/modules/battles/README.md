@@ -38,6 +38,7 @@ ranqueada e das estatísticas respondem 500. O resto da API não é afetado.
 | GET | `/api/battles/characters` | Catálogo de personagens, com as habilidades e as passivas de cada um. |
 | POST | `/api/battles` | Cria uma batalha contra a IA. |
 | GET | `/api/battles` | Lista as últimas 20 batalhas do jogador, de qualquer um dos lados (sem o estado). |
+| GET | `/api/battles/campaign` | As fases da campanha, com o que o jogador já abriu e venceu. |
 | GET | `/api/battles/:id` | Estado atual de uma batalha. |
 | GET | `/api/battles/:id/events?after=N` | O que aconteceu depois do evento `N`. É como cada jogador acompanha as jogadas do outro. |
 | GET | `/api/battles/:id/replay` | A batalha encerrada, do começo ao fim, para assistir de novo. |
@@ -72,6 +73,45 @@ habilidade com custo por turno e os golpes miram em quem tem mais vida. É a
 batalha que o tutorial do app cria, com os dois times fixos; a tela mostra o
 guia quando vê a marca. A marca fica dentro do estado gravado, então não
 existe coluna nova no banco para ela.
+
+### Nível da IA
+
+```json
+POST /api/battles
+{ "team": ["..."], "difficulty": "hard" }
+```
+
+`difficulty` é `easy`, `normal` ou `hard`; sem ele, `normal`. Outro valor
+responde 400 com `INVALID_DIFFICULTY`. O nível fica no estado
+(`state.difficulty`) e na coluna `difficulty` (que a listagem devolve), e em
+cada jogada a IA lê dali como jogar (`chooseAiAction`, em `src/game/ai.ts`):
+
+- `easy`: as regras da IA de treino (uma habilidade com custo por turno,
+  golpes em quem tem mais vida, sem postura);
+- `normal`: a IA de sempre (`chooseAction`);
+- `hard`: para cada jogada possível, imagina a batalha seguindo algumas vezes
+  com a IA normal dos dois lados, numa cópia e com um sorteio próprio (não
+  espia os críticos de verdade), e fica com a jogada que deixou o time dela
+  em melhor situação (`chooseHardAction`). Vence a normal em mais de 80% das
+  batalhas.
+
+Na batalha de treino o nível não conta: a IA é sempre a de treino.
+
+### Campanha
+
+```json
+POST /api/battles
+{ "team": ["..."], "campaignStage": 1, "difficulty": "easy" }
+```
+
+As fases ficam em `src/game/data/campaign.ts`: cada uma tem o time inimigo e
+o cenário dela (`enemyTeam` é ignorado). A fase 1 está sempre aberta; a
+fase N abre quando o jogador vence a N-1, em qualquer nível. Fase que não
+existe responde 400 com `UNKNOWN_STAGE`; fase ainda fechada, 403 com
+`STAGE_LOCKED`. A fase fica no estado (`state.campaignStage`) e na coluna
+`campaign_stage`; o progresso sai das batalhas vencidas com ela
+(`findCampaignWins`). `GET /api/battles/campaign` devolve, para cada fase,
+`unlocked` e `clearedOn` (os níveis em que o jogador já venceu).
 
 ### Jogar
 
