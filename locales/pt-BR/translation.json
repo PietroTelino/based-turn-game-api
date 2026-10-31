@@ -43,7 +43,7 @@
         "restored": "Usuário restaurado com sucesso.",
         "passwordChanged": "Senha alterada com sucesso.",
         "passwordReset": "Senha resetada com sucesso. Um e-mail foi enviado ao usuário com a nova senha.",
-        "emailInUse": "Email already in use",
+        "emailInUse": "Este e-mail já está em uso",
         "incorrectPassword": "A senha informada está incorreta",
         "currentPasswordWrong": "Senha atual incorreta",
         "alreadyDeleted": "Esta conta já foi removida.",
@@ -74,6 +74,10 @@
         "mustBeText": "O e-mail deve ser um texto.",
         "required": "O e-mail é obrigatório.",
         "invalidFormat": "O formato do e-mail é inválido."
+    },
+    "tutorial": {
+        "required": "Faça o tutorial primeiro: as outras partidas são liberadas quando você termina a batalha de treino.",
+        "errorUnexpected": "Erro ao consultar o tutorial"
     },
     "battle": {
         "notFound": "Batalha não encontrada",

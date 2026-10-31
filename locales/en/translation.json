@@ -75,6 +75,10 @@
         "required": "Email is required.",
         "invalidFormat": "Invalid email format."
     },
+    "tutorial": {
+        "required": "Play the tutorial first: the other matches unlock once you finish the training battle.",
+        "errorUnexpected": "Could not check the tutorial"
+    },
     "battle": {
         "notFound": "Battle not found",
         "teamRequired": "Provide the team: a list of character ids",

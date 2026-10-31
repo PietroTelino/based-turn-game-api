@@ -7,3 +7,4 @@ import './modules/battles/tests';
 import './modules/rooms/tests';
 import './modules/ranked/tests';
 import './modules/stats/tests';
+import './modules/tutorial/tests';

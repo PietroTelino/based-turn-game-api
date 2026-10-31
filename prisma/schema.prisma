@@ -16,6 +16,13 @@ model User {
 
     inactivatedAt   DateTime?       @map("inactivated_at")
     deletedAt       DateTime?       @map("deleted_at")
+    // Conta removida: o e-mail dela fica guardado aqui e a coluna `email` recebe uma marca
+    // ("deleted:<id>"). Assim o e-mail fica livre para uma conta nova, e a restauração sabe
+    // qual e-mail devolver.
+    deletedEmail    String?         @map("deleted_email")
+    // Quando o jogador terminou a batalha de treino. Enquanto está vazio, o tutorial é
+    // obrigatório: as outras partidas ficam travadas (src/modules/tutorial).
+    tutorialCompletedAt DateTime?   @map("tutorial_completed_at")
     createdAt       DateTime        @default(now()) @map("created_at")
     updatedAt       DateTime        @updatedAt      @map("updated_at")
 

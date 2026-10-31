@@ -54,6 +54,10 @@ export class UserService {
         validateEmailOrThrow(input.email);
         validatePasswordOrThrow(input.password);
 
+        if (await this.repo.findByEmail(input.email)) {
+            throw new Error('user.emailInUse');
+        }
+
         const hashedPassword = await bcrypt.hash(input.password, 10);
 
         return this.repo.create({

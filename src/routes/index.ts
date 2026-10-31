@@ -16,6 +16,9 @@ import { RankedService } from '../modules/ranked/ranked.service';
 import { createStatsRouter } from '../modules/stats/stats.routes';
 import { StatsRepository } from '../modules/stats/stats.repository';
 import { StatsService } from '../modules/stats/stats.service';
+import { createTutorialRouter } from '../modules/tutorial/tutorial.routes';
+import { TutorialRepository } from '../modules/tutorial/tutorial.repository';
+import { TutorialService } from '../modules/tutorial/tutorial.service';
 import { prisma } from '../prisma';
 
 export const router = Router();
@@ -38,11 +41,18 @@ router.use('/audit', auditRouter);
 // As salas do multiplayer e a fila ranqueada criam batalhas, por isso os três módulos usam o mesmo serviço.
 const battleService = new BattleService(new BattleRepository());
 const rankedService = new RankedService(new RankedRepository(), battleService);
+const tutorialService = new TutorialService(new TutorialRepository());
 
-// Quando uma batalha acaba, a ranqueada lança os pontos (só faz algo se a partida for ranqueada).
+// Quando uma batalha acaba, a ranqueada lança os pontos (só faz algo se a partida for ranqueada)
+// e a batalha de treino terminada marca o tutorial como feito.
 battleService.onFinished((battle) => rankedService.settle(battle));
+battleService.onFinished((battle) => tutorialService.onBattleFinished(battle));
 
-router.use('/battles', createBattlesRouter(battleService));
-router.use('/rooms', createRoomsRouter(new RoomService(new RoomRepository(), battleService)));
-router.use('/ranked', createRankedRouter(rankedService));
+// O tutorial é obrigatório: sem ele, não dá para começar nenhuma partida além da de treino.
+const tutorialGuard = tutorialService.guard();
+
+router.use('/tutorial', createTutorialRouter(tutorialService));
+router.use('/battles', createBattlesRouter(battleService, tutorialService.guard((req) => req.body?.training === true)));
+router.use('/rooms', createRoomsRouter(new RoomService(new RoomRepository(), battleService), tutorialGuard));
+router.use('/ranked', createRankedRouter(rankedService, tutorialGuard));
 router.use('/stats', createStatsRouter(new StatsService(new StatsRepository())));

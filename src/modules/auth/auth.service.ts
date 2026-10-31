@@ -44,8 +44,10 @@ export class AuthService {
     }
 
     async login({ email, password, ip, userAgent }: LoginInput): Promise<AuthResponse> {
-        const user = await this.userRepo.findByEmail(email);
-        
+        // Uma conta removida não usa mais o e-mail, mas quem tenta entrar com ele
+        // (e a senha certa) fica sabendo que a conta foi removida.
+        const user = (await this.userRepo.findByEmail(email)) ?? (await this.userRepo.findDeletedByEmail(email));
+
         if (!user || !(await bcrypt.compare(password, user.password))) {
             throw new Error('auth.invalidCredentials');
         }
