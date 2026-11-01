@@ -115,7 +115,17 @@
     "ranked": {
         "playerNotFound": "Jogador não encontrado",
         "alreadyInBattle": "Você tem uma partida ranqueada em andamento. Termine-a antes de procurar outra.",
-        "errorUnexpected": "Erro ao processar a ranqueada"
+        "errorUnexpected": "Erro ao processar a ranqueada",
+        "draft": {
+            "notFound": "Você não está numa seleção de personagens",
+            "notYourTurn": "Não é a sua vez na seleção",
+            "characterRequired": "Informe o personagem (characterId)",
+            "unknownCharacter": "Personagem desconhecido",
+            "banned": "Esse personagem foi banido",
+            "alreadyBanned": "Esse personagem já foi banido",
+            "alreadyPicked": "Esse personagem já está no seu time",
+            "conflict": "A seleção mudou enquanto sua escolha era enviada. Tente de novo."
+        }
     },
     "stats": {
         "errorUnexpected": "Erro ao carregar as estatísticas"

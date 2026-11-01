@@ -1,4 +1,11 @@
-export type RankedErrorCode = 'INVALID_RANKED_REQUEST' | 'ALREADY_IN_RANKED_BATTLE' | 'PLAYER_NOT_FOUND';
+export type RankedErrorCode =
+    | 'INVALID_RANKED_REQUEST'
+    | 'ALREADY_IN_RANKED_BATTLE'
+    | 'PLAYER_NOT_FOUND'
+    | 'NOT_IN_DRAFT'
+    | 'NOT_YOUR_DRAFT_TURN'
+    | 'INVALID_DRAFT_CHOICE'
+    | 'DRAFT_CONFLICT';
 
 /**
  * Erros do módulo da ranqueada. `messageKey` é a chave de tradução em

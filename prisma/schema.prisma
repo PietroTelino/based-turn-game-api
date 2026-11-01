@@ -175,12 +175,16 @@ model RankedTicket {
     id          String   @id @default(uuid()) @db.Uuid
     userId      String   @unique @map("user_id") @db.Uuid
     user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-    // O time com que o jogador entrou na fila (lista de ids de personagens).
+    // O time com que o jogador entrava na fila, antes da seleção de personagens. Hoje fica
+    // vazio: o time é montado na seleção (RankedDraft).
     team        Json
     // Os pontos do jogador quando entrou: a fila procura alguém com pontos parecidos.
     rating      Int
     // "searching" | "matching" | "matched" | "cancelled" (ver src/modules/ranked/ranked.types.ts)
     status      String   @default("searching")
+    // Pareado: a seleção de personagens dos dois (e, quando ela acaba, a partida está nela).
+    draftId     String?  @map("draft_id") @db.Uuid
+    // A partida dos bilhetes de antes da seleção de personagens.
     battleId    String?  @map("battle_id") @db.Uuid
     // Quando entrou na fila (o bilhete é reaproveitado, então não é a data de criação da linha).
     queuedAt    DateTime @default(now()) @map("queued_at")
@@ -221,4 +225,27 @@ model Room {
 
     @@map("rooms")
     @@index([status, createdAt])
+}
+
+// A seleção de personagens de uma partida ranqueada: os dois jogadores banem e escolhem,
+// alternando, à vista um do outro (src/modules/ranked/ranked.draft.ts).
+model RankedDraft {
+    id            String   @id @default(uuid()) @db.Uuid
+    // Quem fica com o time A e começa; o outro fica com o B.
+    hostId        String   @map("host_id") @db.Uuid
+    guestId       String   @map("guest_id") @db.Uuid
+    // O que já foi feito, em ordem: [{ team, kind: "ban" | "pick", characterId, auto }].
+    actions       Json     @default("[]")
+    // "drafting" | "starting" | "done"
+    status        String   @default("drafting")
+    // A partida criada quando a seleção acaba.
+    battleId      String?  @map("battle_id") @db.Uuid
+    // Quando começou o passo da vez: cada passo tem 30 segundos.
+    turnStartedAt DateTime @map("turn_started_at")
+    // Sobe a cada gravação: é a trava contra duas jogadas ao mesmo tempo.
+    version       Int      @default(0)
+    createdAt     DateTime @default(now()) @map("created_at")
+    updatedAt     DateTime @updatedAt      @map("updated_at")
+
+    @@map("ranked_drafts")
 }

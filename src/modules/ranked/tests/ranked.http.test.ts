@@ -14,6 +14,7 @@ import { InMemoryBattleStore } from '../../battles/tests/in-memory-store';
 import { createStatsRouter } from '../../stats/stats.routes';
 import { StatsService } from '../../stats/stats.service';
 import { InMemoryStatsStore } from '../../stats/tests/in-memory-stats-store';
+import { DRAFT_ORDER } from '../ranked.draft';
 import { createRankedRouter } from '../ranked.routes';
 import { RankedService } from '../ranked.service';
 import { InMemoryRankedStore } from './in-memory-ranked-store';
@@ -26,7 +27,7 @@ const CAIO = '33333333-3333-4333-8333-333333333333';
  * Sobe as rotas de verdade da ranqueada, das batalhas e das estatísticas
  * (Express, autenticação por JWT, traduções, controllers e serviços) numa
  * porta livre, ligadas como em src/routes/index.ts. Só o banco é trocado por
- * memória, e os times são de um personagem, para as batalhas serem curtas.
+ * memória.
  */
 describe('rotas /api/ranked, replay e estatísticas', () => {
     let server: Server;
@@ -57,7 +58,7 @@ describe('rotas /api/ranked, replay e estatísticas', () => {
         }
 
         const battleStore = new InMemoryBattleStore();
-        const battles = new BattleService(battleStore, () => 0, { teamSize: 1 });
+        const battles = new BattleService(battleStore, () => 0);
         const ranked = new RankedService(new InMemoryRankedStore(battleStore, [ANA, BRUNO, CAIO]), battles);
 
         battles.onFinished((battle) => ranked.settle(battle));
@@ -68,7 +69,7 @@ describe('rotas /api/ranked, replay e estatísticas', () => {
         app.use(express.json());
         app.use('/api/battles', createBattlesRouter(battles));
         app.use('/api/ranked', createRankedRouter(ranked));
-        app.use('/api/stats', createStatsRouter(new StatsService(new InMemoryStatsStore(battleStore), 1)));
+        app.use('/api/stats', createStatsRouter(new StatsService(new InMemoryStatsStore(battleStore), 5)));
 
         server = app.listen(0);
         await once(server, 'listening');
@@ -82,7 +83,8 @@ describe('rotas /api/ranked, replay e estatísticas', () => {
 
     it('exigem login', async () => {
         assert.equal((await call('GET', '/ranked')).status, 401);
-        assert.equal((await call('POST', '/ranked/queue', { body: { team: ['barbaro'] } })).status, 401);
+        assert.equal((await call('POST', '/ranked/queue')).status, 401);
+        assert.equal((await call('GET', '/ranked/draft')).status, 401);
         assert.equal((await call('GET', '/stats/characters')).status, 401);
     });
 
@@ -97,37 +99,61 @@ describe('rotas /api/ranked, replay e estatísticas', () => {
             next: { rank: 'silver', at: 100 },
             wins: 0,
             losses: 0,
-            queue: { status: 'idle', battleId: null, waitedSeconds: 0, team: null },
+            queue: { status: 'idle', draftId: null, battleId: null, waitedSeconds: 0 },
         });
     });
 
-    it('POST /ranked/queue pede o time, e o time precisa ser válido', async () => {
-        const noTeam = await call('POST', '/ranked/queue', { token: caio, body: {} });
-        const unknown = await call('POST', '/ranked/queue', { token: caio, body: { team: ['dragao'] } });
+    it('fora de uma seleção, /ranked/draft responde 404', async () => {
+        const seen = await call('GET', '/ranked/draft', { token: caio });
 
-        assert.deepEqual([noTeam.status, noTeam.body.code], [400, 'INVALID_RANKED_REQUEST']);
-        assert.deepEqual([unknown.status, unknown.body.code], [400, 'UNKNOWN_CHARACTER']);
+        assert.deepEqual([seen.status, seen.body.code], [404, 'NOT_IN_DRAFT']);
     });
 
     it('DELETE /ranked/queue tira o jogador da fila', async () => {
-        const entered = await call('POST', '/ranked/queue', { token: caio, body: { team: ['piromante'] } });
+        const entered = await call('POST', '/ranked/queue', { token: caio });
         const left = await call('DELETE', '/ranked/queue', { token: caio });
 
-        assert.deepEqual([entered.status, entered.body.status, entered.body.team], [200, 'searching', ['piromante']]);
+        assert.deepEqual([entered.status, entered.body.status], [200, 'searching']);
         assert.deepEqual([left.status, left.body.status], [200, 'idle']);
         assert.equal((await call('GET', '/ranked/queue', { token: caio })).body.status, 'idle');
     });
 
-    it('fluxo completo: fila, pareamento, partida, pontos, replay e estatísticas', async () => {
-        // A Ana entra e espera; o Bruno entra e os dois são pareados.
-        const waiting = await call('POST', '/ranked/queue', { token: ana, body: { team: ['barbaro'] } });
-        const matched = await call('POST', '/ranked/queue', { token: bruno, body: { team: ['cavaleiro'] } });
+    it('fluxo completo: fila, seleção de personagens, partida, pontos, replay e estatísticas', async () => {
+        // A Ana entra e espera; o Bruno entra e os dois vão para a seleção.
+        const waiting = await call('POST', '/ranked/queue', { token: ana });
+        const paired = await call('POST', '/ranked/queue', { token: bruno });
         const seenByAna = await call('GET', '/ranked/queue', { token: ana });
-        const battleId: string = matched.body.battleId;
 
         assert.equal(waiting.body.status, 'searching');
-        assert.deepEqual([matched.status, matched.body.status], [200, 'matched']);
-        assert.deepEqual([seenByAna.body.status, seenByAna.body.battleId], ['matched', battleId]);
+        assert.deepEqual([paired.status, paired.body.status], [200, 'drafting']);
+        assert.deepEqual([seenByAna.body.status, seenByAna.body.draftId], ['drafting', paired.body.draftId]);
+
+        // Na seleção, só quem está na vez joga, e o personagem precisa valer.
+        const wrongTurn = await call('POST', '/ranked/draft', { token: bruno, body: { characterId: 'barbaro' } });
+        const noCharacter = await call('POST', '/ranked/draft', { token: ana, body: {} });
+
+        assert.deepEqual([wrongTurn.status, wrongTurn.body.code], [409, 'NOT_YOUR_DRAFT_TURN']);
+        assert.deepEqual([noCharacter.status, noCharacter.body.code], [400, 'INVALID_RANKED_REQUEST']);
+
+        const teams = { A: ['barbaro', 'criomante', 'guardiao', 'sacerdote', 'arqueiro'], B: ['cavaleiro', 'ladino', 'vampiro', 'driade', 'banshee'] };
+        const bans = { A: 'necromante', B: 'druida' };
+        const used = { A: 0, B: 0 };
+        let last: any = null;
+
+        for (const step of DRAFT_ORDER) {
+            const characterId = step.kind === 'ban' ? bans[step.team] : teams[step.team][used[step.team]++];
+            const response = await call('POST', '/ranked/draft', { token: step.team === 'A' ? ana : bruno, body: { characterId } });
+
+            assert.equal(response.status, 200, `${step.team} ${step.kind} ${characterId}`);
+            last = response.body;
+        }
+
+        const banned = await call('GET', '/ranked/draft', { token: bruno });
+        const battleId: string = last.battleId;
+
+        assert.deepEqual([last.status, last.banned, last.teams], ['done', ['necromante', 'druida'], teams]);
+        assert.equal(banned.body.battleId, battleId);
+        assert.deepEqual((await call('GET', '/ranked/queue', { token: ana })).body, { status: 'matched', draftId: null, battleId, waitedSeconds: 0 });
 
         // A partida é ranqueada, tem prazo, e só os dois a enxergam.
         const asAna = await call('GET', `/battles/${battleId}`, { token: ana });
@@ -137,12 +163,13 @@ describe('rotas /api/ranked, replay e estatísticas', () => {
         assert.equal((await call('GET', `/battles/${battleId}`, { token: caio })).status, 404);
 
         // Com a partida em andamento: não dá para entrar em outra fila, ver o replay nem pedir a vitória antes do prazo.
-        const again = await call('POST', '/ranked/queue', { token: ana, body: { team: ['barbaro'] } });
-        const againEnglish = await call('POST', '/ranked/queue', { token: ana, body: { team: ['barbaro'] }, lang: 'en' });
+        const again = await call('POST', '/ranked/queue', { token: ana });
+        const againEnglish = await call('POST', '/ranked/queue', { token: ana, lang: 'en' });
         const early = await call('GET', `/battles/${battleId}/replay`, { token: ana });
-        // O Bárbaro da Ana é mais veloz: a vez é dela, e quem espera é o Bruno.
-        const tooEarly = await call('POST', `/battles/${battleId}/timeout`, { token: bruno });
-        const ownTurn = await call('POST', `/battles/${battleId}/timeout`, { token: ana });
+        const active = asAna.body.state.units.find((unit: any) => unit.id === asAna.body.state.activeUnitId);
+        const [onTurn, waitingPlayer] = active.team === 'A' ? [ana, bruno] : [bruno, ana];
+        const tooEarly = await call('POST', `/battles/${battleId}/timeout`, { token: waitingPlayer });
+        const ownTurn = await call('POST', `/battles/${battleId}/timeout`, { token: onTurn });
 
         assert.deepEqual([again.status, again.body.code, again.body.battleId], [409, 'ALREADY_IN_RANKED_BATTLE', battleId]);
         assert.match(again.body.message, /partida ranqueada em andamento/);
@@ -151,9 +178,7 @@ describe('rotas /api/ranked, replay e estatísticas', () => {
         assert.deepEqual([tooEarly.status, tooEarly.body.code], [409, 'TIMEOUT_TOO_EARLY']);
         assert.deepEqual([ownTurn.status, ownTurn.body.code], [409, 'TIMEOUT_NOT_ALLOWED']);
 
-        // A Ana joga e o Bruno desiste: a Ana vence e os pontos são lançados.
-        await call('POST', `/battles/${battleId}/actions`, { token: ana, body: { unitId: 'A1', skillId: 'barbaro.machadada', targetId: 'B1' } });
-
+        // O Bruno desiste: a Ana vence e os pontos são lançados.
         const quit = await call('POST', `/battles/${battleId}/surrender`, { token: bruno });
 
         assert.deepEqual([quit.body.battle.status, quit.body.battle.winner, quit.body.battle.ratingChange], ['finished', 'A', 0]);
@@ -186,8 +211,9 @@ describe('rotas /api/ranked, replay e estatísticas', () => {
         const stats = await call('GET', '/stats/characters', { token: ana });
 
         assert.equal(stats.status, 200);
-        assert.deepEqual(stats.body.mine, { teams: 1, characters: [{ characterId: 'barbaro', picks: 1, share: 1 }] });
-        assert.deepEqual(stats.body.global.characters.map((item: any) => item.characterId), ['barbaro', 'cavaleiro']);
+        assert.equal(stats.body.mine.teams, 1);
+        assert.deepEqual(stats.body.mine.characters.map((item: any) => item.characterId).sort(), [...teams.A].sort());
+        assert.equal(stats.body.global.teams, 2);
         assert.ok(![ANA, BRUNO, CAIO].some((id) => JSON.stringify(stats.body).includes(id)));
     });
 });

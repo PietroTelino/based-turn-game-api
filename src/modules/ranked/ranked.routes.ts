@@ -20,6 +20,8 @@ export function createRankedRouter(service: RankedService, guard?: RequestHandle
     rankedRouter.get('/queue', controller.queue);
     rankedRouter.post('/queue', ...(guard ? [guard] : []), controller.enter);
     rankedRouter.delete('/queue', controller.leave);
+    rankedRouter.get('/draft', controller.draft);
+    rankedRouter.post('/draft', controller.draftAction);
 
     return rankedRouter;
 }

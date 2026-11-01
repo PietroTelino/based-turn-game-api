@@ -3,10 +3,6 @@ import { BattleError } from '../battles/battle.errors';
 import { RankedError } from './ranked.errors';
 import type { RankedService } from './ranked.service';
 
-function isStringArray(value: unknown): value is string[] {
-    return Array.isArray(value) && value.every((item) => typeof item === 'string');
-}
-
 export class RankedController {
     constructor(private service: RankedService) {}
 
@@ -23,20 +19,14 @@ export class RankedController {
         }
     };
 
-    /** POST /queue { team } — entra na fila com o time escolhido. */
+    /** POST /queue — entra na fila. O time é montado depois, na seleção de personagens. */
     enter = async (req: Request, res: Response) => {
         try {
             if (!req.user) {
                 return res.status(401).json({ message: req.t('auth.notAuthenticated') });
             }
 
-            const { team } = req.body ?? {};
-
-            if (!isStringArray(team)) {
-                throw new RankedError('INVALID_RANKED_REQUEST', 400, 'battle.teamRequired');
-            }
-
-            return res.json(await this.service.enter(req.user.id, team));
+            return res.json(await this.service.enter(req.user.id));
         } catch (error) {
             return this.handleError(req, res, error);
         }
@@ -50,6 +40,38 @@ export class RankedController {
             }
 
             return res.json(await this.service.queue(req.user.id));
+        } catch (error) {
+            return this.handleError(req, res, error);
+        }
+    };
+
+    /** GET /draft — a seleção de personagens de quem pediu. É a consulta que a tela repete durante a seleção. */
+    draft = async (req: Request, res: Response) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
+            }
+
+            return res.json(await this.service.draft(req.user.id));
+        } catch (error) {
+            return this.handleError(req, res, error);
+        }
+    };
+
+    /** POST /draft { characterId } — bane ou escolhe no passo da vez. */
+    draftAction = async (req: Request, res: Response) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
+            }
+
+            const { characterId } = req.body ?? {};
+
+            if (typeof characterId !== 'string') {
+                throw new RankedError('INVALID_RANKED_REQUEST', 400, 'ranked.draft.characterRequired');
+            }
+
+            return res.json(await this.service.draftAction(req.user.id, characterId));
         } catch (error) {
             return this.handleError(req, res, error);
         }

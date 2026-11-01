@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { InMemoryBattleStore } from '../../battles/tests/in-memory-store';
-import type { RankedResult, RankedSettlement, RankedStanding, RankedStore, RankedTicket } from '../ranked.types';
+import type { DraftChange, RankedDraft, RankedResult, RankedSettlement, RankedStanding, RankedStore, RankedTicket } from '../ranked.types';
 
 /**
  * Faz o papel do banco nos testes: os bilhetes da fila num Map e os pontos de
@@ -9,6 +9,7 @@ import type { RankedResult, RankedSettlement, RankedStanding, RankedStore, Ranke
  */
 export class InMemoryRankedStore implements RankedStore {
     private tickets = new Map<string, RankedTicket>();
+    private drafts = new Map<string, RankedDraft>();
     private standings = new Map<string, RankedStanding>();
 
     constructor(
@@ -46,17 +47,17 @@ export class InMemoryRankedStore implements RankedStore {
     async findTicket(userId: string): Promise<RankedTicket | null> {
         const ticket = [...this.tickets.values()].find((item) => item.userId === userId);
 
-        return ticket ? { ...ticket, team: [...ticket.team] } : null;
+        return ticket ? { ...ticket } : null;
     }
 
-    async enqueue(userId: string, team: string[], rating: number, now: Date): Promise<RankedTicket> {
+    async enqueue(userId: string, rating: number, now: Date): Promise<RankedTicket> {
         const existing = [...this.tickets.values()].find((item) => item.userId === userId);
         const ticket: RankedTicket = {
             id: existing?.id ?? randomUUID(),
             userId,
-            team: [...team],
             rating,
             status: 'searching',
+            draftId: null,
             battleId: null,
             queuedAt: now,
             lastSeenAt: now,
@@ -65,7 +66,7 @@ export class InMemoryRankedStore implements RankedStore {
 
         this.tickets.set(ticket.id, ticket);
 
-        return { ...ticket, team: [...team] };
+        return { ...ticket };
     }
 
     async touch(ticketId: string, now: Date): Promise<void> {
@@ -77,7 +78,7 @@ export class InMemoryRankedStore implements RankedStore {
             .filter((ticket) => ticket.status === 'searching' && ticket.lastSeenAt.getTime() >= seenSince.getTime())
             .sort((a, b) => a.queuedAt.getTime() - b.queuedAt.getTime())
             .slice(0, limit)
-            .map((ticket) => ({ ...ticket, team: [...ticket.team] }));
+            .map((ticket) => ({ ...ticket }));
     }
 
     async claim(ticketId: string): Promise<boolean> {
@@ -88,10 +89,54 @@ export class InMemoryRankedStore implements RankedStore {
         this.update(ticketId, (ticket) => ticket.status === 'matching', { status: 'searching' });
     }
 
-    async setMatched(ticketIds: string[], battleId: string): Promise<void> {
+    async setMatched(ticketIds: string[], draftId: string): Promise<void> {
         for (const id of ticketIds) {
-            this.update(id, (ticket) => ticket.status === 'matching', { status: 'matched', battleId });
+            this.update(id, (ticket) => ticket.status === 'matching', { status: 'matched', draftId, battleId: null });
         }
+    }
+
+    async createDraft(hostId: string, guestId: string, now: Date): Promise<RankedDraft> {
+        const draft: RankedDraft = {
+            id: randomUUID(),
+            hostId,
+            guestId,
+            actions: [],
+            status: 'drafting',
+            battleId: null,
+            turnStartedAt: now,
+            version: 0,
+            createdAt: now,
+            updatedAt: now,
+        };
+
+        this.drafts.set(draft.id, draft);
+
+        return structuredClone(draft);
+    }
+
+    async findDraft(id: string): Promise<RankedDraft | null> {
+        const draft = this.drafts.get(id);
+
+        return draft ? structuredClone(draft) : null;
+    }
+
+    async saveDraft(id: string, expectedVersion: number, change: DraftChange): Promise<RankedDraft | null> {
+        const draft = this.drafts.get(id);
+
+        if (!draft || draft.version !== expectedVersion) {
+            return null;
+        }
+
+        const saved: RankedDraft = { ...draft, ...structuredClone(change), version: draft.version + 1, updatedAt: this.now() };
+
+        this.drafts.set(id, saved);
+
+        return structuredClone(saved);
+    }
+
+    /** Nos testes, o nome de cada jogador é o próprio id. */
+    async findNames(userIds: string[]): Promise<Record<string, string>> {
+        return Object.fromEntries(userIds.map((id) => [id, id]));
     }
 
     async cancel(userId: string): Promise<boolean> {
