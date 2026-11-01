@@ -614,6 +614,12 @@ export type BattleEvent =
     | { type: 'revived'; sourceId: string; unitId: string; hp: number }
     /** Um time desistiu. Vem sempre seguido de battle_ended. */
     | { type: 'surrendered'; team: TeamId }
+    /**
+     * Entre dois jogadores: o prazo de quem estava na vez acabou e a jogada que
+     * vem logo depois (de `unitId`) foi escolhida ao acaso. O motor não emite:
+     * quem põe na lista é o serviço de batalhas.
+     */
+    | { type: 'turn_timed_out'; unitId: string; team: TeamId }
     | { type: 'battle_ended'; winner: TeamId };
 
 export interface BattleResult {

@@ -4,6 +4,7 @@ import {
     CAMPAIGN,
     CHARACTERS,
     applyAction,
+    chooseAction,
     chooseAiAction,
     createBattle,
     getCampaignStage,
@@ -39,11 +40,12 @@ export const AI_TEAM: TeamId = 'B';
 export const TEAM_SIZE = 5;
 
 /**
- * Partida ranqueada: quanto tempo quem está na vez tem para jogar. Passado o
- * prazo, o outro lado pode pedir a vitória (`claimTimeout`). Sem isto, quem
- * está perdendo só fecharia a tela e a partida nunca valeria pontos.
+ * Entre dois jogadores (casual ou ranqueada): quanto tempo quem está na vez
+ * tem para jogar. Passado o prazo, a jogada é feita ao acaso por ele
+ * (`playExpiredTurn`), e a vez seguinte começa com o prazo cheio. Assim
+ * ninguém trava a partida fechando a tela.
  */
-export const RANKED_TURN_LIMIT_MS = 90_000;
+export const PVP_TURN_LIMIT_MS = 30_000;
 
 const LIST_LIMIT = 20;
 const MAX_AI_ACTIONS_IN_A_ROW = 100;
@@ -271,7 +273,7 @@ export class BattleService {
     async get(userId: string, battleId: string): Promise<BattleView> {
         const { record, team } = await this.findForPlayer(userId, battleId);
 
-        return this.toView(record, team);
+        return this.toView(await this.playExpiredTurn(record), team);
     }
 
     /**
@@ -296,9 +298,11 @@ export class BattleService {
      * jogadas do oponente. Contra a IA a lista vem sempre vazia.
      */
     async events(userId: string, battleId: string, after: number): Promise<BattleResponse> {
-        const { record, team } = await this.findForPlayer(userId, battleId);
+        const found = await this.findForPlayer(userId, battleId);
+        // As telas dos dois perguntam por aqui o tempo todo: é aqui que o prazo vencido vira jogada automática.
+        const record = await this.playExpiredTurn(found.record);
 
-        return { battle: this.toView(record, team), events: record.events.slice(Math.max(0, after)) };
+        return { battle: this.toView(record, found.team), events: record.events.slice(Math.max(0, after)) };
     }
 
     async act(userId: string, battleId: string, action: BattleAction): Promise<BattleResponse> {
@@ -324,38 +328,72 @@ export class BattleService {
     }
 
     /**
-     * Partida ranqueada: o adversário passou do prazo sem jogar, e quem está
-     * esperando pede a vitória. Vale como desistência do time que travou, com
-     * a marca de tempo esgotado no estado. Só quem NÃO está na vez pode pedir,
-     * e só depois que o prazo acabou.
+     * Entre dois jogadores: se o prazo de quem está na vez acabou, faz uma
+     * jogada ao acaso por ele (uma habilidade que ele pode usar, num alvo
+     * possível), com um evento turn_timed_out antes, para as telas mostrarem o
+     * que houve. Devolve a batalha como ficou. Quem chama são as consultas
+     * (get e events), que as telas repetem; se duas chegarem juntas, só uma
+     * grava e a outra lê o que ela gravou.
      */
-    async claimTimeout(userId: string, battleId: string): Promise<BattleResponse> {
-        const { record, team } = await this.findForPlayer(userId, battleId);
+    private async playExpiredTurn(record: BattleRecord): Promise<BattleRecord> {
         const active = getActiveUnit(record.state);
 
-        if (!record.ranked || record.status !== 'in_progress' || !active || active.team === team) {
-            throw new BattleError('TIMEOUT_NOT_ALLOWED', 409, 'battle.timeoutNotAllowed');
+        if (!isVersus(record) || record.status !== 'in_progress' || !active || this.turnTimeLeft(record) > 0) {
+            return record;
         }
 
-        if (this.turnTimeLeft(record) > 0) {
-            throw new BattleError('TIMEOUT_TOO_EARLY', 409, 'battle.timeoutTooEarly');
+        const played = applyAction(record.state, this.randomAction(record.state));
+        const result: BattleResult = {
+            state: played.state,
+            events: [{ type: 'turn_timed_out', unitId: active.id, team: active.team }, ...played.events],
+        };
+        const saved = await this.commit(record, result);
+
+        if (saved) {
+            return saved;
         }
 
-        const result = surrender(record.state, active.team);
+        const fresh = await this.store.findById(record.id);
 
-        result.state.timedOut = true;
+        return fresh ? { ...fresh, state: upgradeState(fresh.state) } : record;
+    }
 
-        return this.save(record, team, result);
+    /** Uma jogada qualquer que a unidade da vez pode fazer: a habilidade e o alvo saem do sorteio do serviço. */
+    private randomAction(state: BattleState): BattleAction {
+        const options = getAvailableActions(state, { previews: false }).filter((option) => option.usable);
+        const option = options[Math.floor(this.random() * options.length)];
+
+        if (!option || state.activeUnitId === null) {
+            return chooseAction(state);
+        }
+
+        const targetId = option.requiresTarget ? option.targetIds[Math.floor(this.random() * option.targetIds.length)] : undefined;
+
+        return { unitId: state.activeUnitId, skillId: option.skill.id, ...(targetId !== undefined && { targetId }) };
     }
 
     /** Grava o resultado de uma jogada (ou desistência) e monta a resposta para quem jogou. */
     private async save(record: BattleRecord, team: TeamId, result: BattleResult): Promise<BattleResponse> {
+        const saved = await this.commit(record, result);
+
+        if (!saved) {
+            throw new BattleError('BATTLE_CONFLICT', 409, 'battle.conflict');
+        }
+
+        return { battle: this.toView(saved, team), events: result.events };
+    }
+
+    /**
+     * Grava o resultado no histórico da batalha, só se ninguém gravou antes
+     * (devolve null nesse caso), e avisa os ouvintes quando ela acaba.
+     */
+    private async commit(record: BattleRecord, result: BattleResult): Promise<BattleRecord | null> {
         // Os eventos entram no histórico: é por ele que o outro jogador acompanha
         // a partida, e é ele que o replay mostra depois.
         let saved = await this.store.saveIfStep(record.id, record.step, this.toSnapshot(result.state), [...record.events, ...result.events]);
 
         if (!saved) {
-            throw new BattleError('BATTLE_CONFLICT', 409, 'battle.conflict');
+            return null;
         }
 
         // Só uma requisição consegue gravar o fim da batalha (a trava é o
@@ -369,12 +407,12 @@ export class BattleService {
             saved = (await this.store.findById(saved.id)) ?? saved;
         }
 
-        return { battle: this.toView(saved, team), events: result.events };
+        return saved;
     }
 
     /** Quanto falta do prazo de quem está na vez, em ms (0 quando acabou). O relógio zera a cada jogada gravada. */
     private turnTimeLeft(record: BattleRecord): number {
-        return Math.max(0, RANKED_TURN_LIMIT_MS - (this.now().getTime() - record.updatedAt.getTime()));
+        return Math.max(0, PVP_TURN_LIMIT_MS - (this.now().getTime() - record.updatedAt.getTime()));
     }
 
     private toSnapshot(state: BattleState): BattleSnapshot {
@@ -393,7 +431,7 @@ export class BattleService {
     /** A batalha como `team` a enxerga. */
     private toView(record: BattleRecord, team: TeamId): BattleView {
         const active = getActiveUnit(record.state);
-        const hasDeadline = record.ranked && record.status === 'in_progress';
+        const hasDeadline = isVersus(record) && record.status === 'in_progress';
 
         return {
             id: record.id,

@@ -44,7 +44,8 @@ Quanto vale uma partida depende da diferença de pontos entre os dois
 
 A vitória vale um pouco mais do que a derrota custa, de propósito: quem joga
 sobe aos poucos mesmo ganhando metade das partidas. Ninguém fica com menos de
-zero. Desistir ou deixar o prazo da vez acabar conta como derrota.
+zero. Desistir conta como derrota. Quem deixa o prazo da vez acabar (30
+segundos) recebe uma jogada ao acaso, e a partida segue.
 
 ## Como a fila funciona
 

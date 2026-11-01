@@ -88,8 +88,6 @@
         "notYourUnit": "Essa unidade não é sua",
         "conflict": "A batalha mudou enquanto sua ação era processada. Atualize e tente de novo.",
         "replayUnavailable": "O replay desta batalha não está disponível",
-        "timeoutNotAllowed": "Não é possível pedir a vitória por tempo agora",
-        "timeoutTooEarly": "O prazo do adversário ainda não acabou",
         "invalidDifficulty": "Nível de dificuldade inválido: use easy, normal ou hard",
         "unknownStage": "Fase da campanha desconhecida: {{stage}}",
         "stageLocked": "Essa fase ainda está bloqueada: vença a fase anterior primeiro",

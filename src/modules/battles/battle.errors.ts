@@ -6,8 +6,6 @@ export type BattleErrorCode =
     | 'NOT_YOUR_UNIT'
     | 'BATTLE_CONFLICT'
     | 'REPLAY_UNAVAILABLE'
-    | 'TIMEOUT_NOT_ALLOWED'
-    | 'TIMEOUT_TOO_EARLY'
     | 'INVALID_DIFFICULTY'
     | 'UNKNOWN_STAGE'
     | 'STAGE_LOCKED';

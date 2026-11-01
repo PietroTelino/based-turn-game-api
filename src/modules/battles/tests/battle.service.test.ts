@@ -4,7 +4,7 @@ import { ARENAS, CAMPAIGN, CHARACTERS, FURY_DAMAGE_PER_TURN, FURY_START_TURN, Ga
 import type { BattleState, GameRuleErrorCode } from '../../../game';
 import { BattleError } from '../battle.errors';
 import type { BattleErrorCode } from '../battle.errors';
-import { BattleService, RANKED_TURN_LIMIT_MS, TEAM_SIZE } from '../battle.service';
+import { BattleService, PVP_TURN_LIMIT_MS, TEAM_SIZE } from '../battle.service';
 import { InMemoryBattleStore } from './in-memory-store';
 
 const PLAYER = 'jogador-1';
@@ -705,7 +705,7 @@ describe('BattleService: personagens escolhidos', () => {
     });
 });
 
-describe('BattleService: prazo da partida ranqueada', () => {
+describe('BattleService: prazo da vez entre jogadores', () => {
     const HOST = PLAYER;
     const GUEST = OTHER_PLAYER;
 
@@ -720,52 +720,61 @@ describe('BattleService: prazo da partida ranqueada', () => {
         return { clock, store, service, id };
     }
 
-    it('a partida ranqueada diz quanto tempo quem está na vez ainda tem; a comum não tem prazo', async () => {
+    it('casual ou ranqueada, quem está na vez tem 30 segundos; contra a IA não há prazo', async () => {
         const { clock, service, id } = await ranked();
 
-        assert.deepEqual([(await service.get(HOST, id)).ranked, (await service.get(HOST, id)).turnTimeLeftMs], [true, RANKED_TURN_LIMIT_MS]);
+        assert.equal(PVP_TURN_LIMIT_MS, 30_000);
+        assert.deepEqual([(await service.get(HOST, id)).ranked, (await service.get(HOST, id)).turnTimeLeftMs], [true, PVP_TURN_LIMIT_MS]);
 
-        clock.now += 30_000;
+        clock.now += 10_000;
 
-        assert.equal((await service.get(GUEST, id)).turnTimeLeftMs, RANKED_TURN_LIMIT_MS - 30_000);
+        assert.equal((await service.get(GUEST, id)).turnTimeLeftMs, PVP_TURN_LIMIT_MS - 10_000);
 
         // Cada jogada gravada zera o relógio para quem joga em seguida.
         const played = await service.act(HOST, id, { unitId: 'A1', skillId: 'barbaro.machadada', targetId: 'B1' });
 
-        assert.equal(played.battle.turnTimeLeftMs, RANKED_TURN_LIMIT_MS);
+        assert.equal(played.battle.turnTimeLeftMs, PVP_TURN_LIMIT_MS);
 
-        const friendly = await ranked({});
+        const casual = await ranked({});
 
-        assert.deepEqual([(await friendly.service.get(HOST, friendly.id)).ranked, (await friendly.service.get(HOST, friendly.id)).turnTimeLeftMs], [false, null]);
+        assert.deepEqual([(await casual.service.get(HOST, casual.id)).ranked, (await casual.service.get(HOST, casual.id)).turnTimeLeftMs], [false, PVP_TURN_LIMIT_MS]);
+
+        const solo = await casual.service.create(HOST, { team: ['barbaro'], enemyTeam: ['cavaleiro'], seed: 1 });
+
+        assert.equal(solo.battle.turnTimeLeftMs, null);
     });
 
-    it('passado o prazo, quem está esperando pede a vitória: conta como desistência por tempo de quem travou', async () => {
-        const { clock, service, id } = await ranked();
+    it('passado o prazo, a próxima consulta joga ao acaso por quem estava na vez, e a vez seguinte começa com o prazo cheio', async () => {
+        for (const options of [{ ranked: true }, {}]) {
+            const { clock, service, id } = await ranked(options);
+            const cursor = (await service.get(GUEST, id)).cursor;
 
-        // Ainda é cedo, e de todo jeito o anfitrião (que está na vez) não pode pedir.
-        await rejectsWith(service.claimTimeout(GUEST, id), 'TIMEOUT_TOO_EARLY');
-        await rejectsWith(service.claimTimeout(HOST, id), 'TIMEOUT_NOT_ALLOWED');
+            clock.now += PVP_TURN_LIMIT_MS - 1;
+            assert.deepEqual((await service.events(GUEST, id, cursor)).events, [], 'ainda dentro do prazo');
 
-        clock.now += RANKED_TURN_LIMIT_MS;
+            clock.now += 1;
 
-        await rejectsWith(service.claimTimeout(HOST, id), 'TIMEOUT_NOT_ALLOWED');
+            const { battle, events } = await service.events(GUEST, id, cursor);
 
-        const claimed = await service.claimTimeout(GUEST, id);
-
-        assert.deepEqual(
-            [claimed.battle.status, claimed.battle.winner, claimed.battle.state.surrenderedBy, claimed.battle.state.timedOut, claimed.battle.turnTimeLeftMs],
-            ['finished', 'B', 'A', true, null],
-        );
-        assert.deepEqual(claimed.events.map((event) => event.type), ['surrendered', 'battle_ended']);
-        await rejectsWith(service.claimTimeout(GUEST, id), 'TIMEOUT_NOT_ALLOWED');
+            // O sorteio em 0 pega a primeira habilidade que vale, no primeiro alvo.
+            assert.deepEqual(events[0], { type: 'turn_timed_out', unitId: 'A1', team: 'A' });
+            assert.deepEqual(events[1], { type: 'skill_used', unitId: 'A1', skillId: 'barbaro.machadada', targetIds: ['B1'], team: 'A', energy: 3 });
+            assert.equal(battle.state.activeUnitId, 'B1');
+            assert.equal(battle.turnTimeLeftMs, PVP_TURN_LIMIT_MS);
+            // O anfitrião vê a mesma jogada no histórico.
+            assert.deepEqual((await service.events(HOST, id, cursor)).events, events);
+        }
     });
 
-    it('só vale em partida ranqueada', async () => {
-        const { clock, service, id } = await ranked({});
+    it('as duas telas perguntando juntas fazem uma jogada automática só', async () => {
+        const { clock, store, service, id } = await ranked();
 
-        clock.now += RANKED_TURN_LIMIT_MS * 2;
+        clock.now += PVP_TURN_LIMIT_MS;
+        await Promise.all([service.events(HOST, id, 0), service.events(GUEST, id, 0), service.get(HOST, id)]);
 
-        await rejectsWith(service.claimTimeout(GUEST, id), 'TIMEOUT_NOT_ALLOWED');
+        const stored = await store.findById(id);
+
+        assert.equal(stored?.events.filter((event) => event.type === 'turn_timed_out').length, 1);
     });
 
     it('quem pediu para ser avisado do fim da batalha é avisado uma vez, depois da gravação', async () => {

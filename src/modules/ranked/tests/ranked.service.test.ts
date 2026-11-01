@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { BattleService, RANKED_TURN_LIMIT_MS } from '../../battles/battle.service';
+import { BattleService, PVP_TURN_LIMIT_MS } from '../../battles/battle.service';
 import { InMemoryBattleStore } from '../../battles/tests/in-memory-store';
 import { DRAFT_ORDER, DRAFT_TURN_MS } from '../ranked.draft';
 import { RankedError } from '../ranked.errors';
@@ -160,7 +160,7 @@ describe('ranqueada: fila e pareamento', () => {
         assert.deepEqual([asAna.playerTeam, asBruno.playerTeam], ['A', 'B']);
         assert.deepEqual(asAna.state.units.filter((unit) => unit.team === 'A').map((unit) => unit.characterId), ANA_TEAM);
         assert.deepEqual(asAna.state.units.filter((unit) => unit.team === 'B').map((unit) => unit.characterId), BRUNO_TEAM);
-        assert.equal(asAna.turnTimeLeftMs, RANKED_TURN_LIMIT_MS);
+        assert.equal(asAna.turnTimeLeftMs, PVP_TURN_LIMIT_MS);
     });
 
     it('o jogador precisa existir', async () => {
@@ -443,17 +443,17 @@ describe('ranqueada: resultado', () => {
         assert.deepEqual((await context.battles.list(BRUNO)).map((item) => [item.ranked, item.ratingChange]), [[true, 17]]);
     });
 
-    it('vitória por tempo esgotado também vale pontos', async () => {
+    it('o tempo esgotado não encerra a partida: a jogada é feita ao acaso e a partida segue valendo pontos', async () => {
         const context = setup();
         const battleId = await match(context);
-        const waiting = (await context.battles.get(ANA, battleId)).availableActions.length === 0 ? ANA : BRUNO;
+        const cursor = (await context.battles.get(ANA, battleId)).cursor;
 
-        context.clock.now += RANKED_TURN_LIMIT_MS;
+        context.clock.now += PVP_TURN_LIMIT_MS;
 
-        const claimed = await context.battles.claimTimeout(waiting, battleId);
+        const { battle, events } = await context.battles.events(BRUNO, battleId, cursor);
 
-        assert.deepEqual([claimed.battle.status, claimed.battle.state.timedOut, claimed.battle.ratingChange], ['finished', true, 16]);
-        assert.equal((await context.service.profile(waiting)).wins, 1);
+        assert.equal(events[0]?.type, 'turn_timed_out');
+        assert.deepEqual([battle.status, battle.ranked], ['in_progress', true]);
     });
 
     it('o resultado de uma partida é lançado uma vez só', async () => {

@@ -88,8 +88,6 @@
         "notYourUnit": "That unit is not yours",
         "conflict": "The battle changed while your action was being processed. Refresh and try again.",
         "replayUnavailable": "The replay of this battle is not available",
-        "timeoutNotAllowed": "You cannot claim a win on time right now",
-        "timeoutTooEarly": "Your opponent's time has not run out yet",
         "invalidDifficulty": "Invalid difficulty: use easy, normal or hard",
         "unknownStage": "Unknown campaign stage: {{stage}}",
         "stageLocked": "This stage is still locked: beat the previous stage first",

@@ -162,21 +162,15 @@ describe('rotas /api/ranked, replay e estatísticas', () => {
         assert.ok(asAna.body.turnTimeLeftMs > 0);
         assert.equal((await call('GET', `/battles/${battleId}`, { token: caio })).status, 404);
 
-        // Com a partida em andamento: não dá para entrar em outra fila, ver o replay nem pedir a vitória antes do prazo.
+        // Com a partida em andamento: não dá para entrar em outra fila nem ver o replay.
         const again = await call('POST', '/ranked/queue', { token: ana });
         const againEnglish = await call('POST', '/ranked/queue', { token: ana, lang: 'en' });
         const early = await call('GET', `/battles/${battleId}/replay`, { token: ana });
-        const active = asAna.body.state.units.find((unit: any) => unit.id === asAna.body.state.activeUnitId);
-        const [onTurn, waitingPlayer] = active.team === 'A' ? [ana, bruno] : [bruno, ana];
-        const tooEarly = await call('POST', `/battles/${battleId}/timeout`, { token: waitingPlayer });
-        const ownTurn = await call('POST', `/battles/${battleId}/timeout`, { token: onTurn });
 
         assert.deepEqual([again.status, again.body.code, again.body.battleId], [409, 'ALREADY_IN_RANKED_BATTLE', battleId]);
         assert.match(again.body.message, /partida ranqueada em andamento/);
         assert.match(againEnglish.body.message, /ranked match in progress/);
         assert.deepEqual([early.status, early.body.code], [409, 'REPLAY_UNAVAILABLE']);
-        assert.deepEqual([tooEarly.status, tooEarly.body.code], [409, 'TIMEOUT_TOO_EARLY']);
-        assert.deepEqual([ownTurn.status, ownTurn.body.code], [409, 'TIMEOUT_NOT_ALLOWED']);
 
         // O Bruno desiste: a Ana vence e os pontos são lançados.
         const quit = await call('POST', `/battles/${battleId}/surrender`, { token: bruno });

@@ -28,7 +28,6 @@ export function createBattlesRouter(service: BattleService, guard?: RequestHandl
     battlesRouter.get('/:id/replay', controller.replay);
     battlesRouter.post('/:id/actions', controller.act);
     battlesRouter.post('/:id/surrender', controller.surrender);
-    battlesRouter.post('/:id/timeout', controller.timeout);
 
     return battlesRouter;
 }

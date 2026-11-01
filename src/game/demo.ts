@@ -128,6 +128,9 @@ function describe(state: BattleState, event: BattleEvent): string | null {
         case 'surrendered':
             return `\nO time ${event.team} desistiu.`;
 
+        case 'turn_timed_out':
+            return `    O tempo de ${label(event.unitId)} acabou: jogada automática.`;
+
         // Evento técnico (a lista completa de status): não precisa aparecer no terminal.
         case 'statuses_changed':
             return null;

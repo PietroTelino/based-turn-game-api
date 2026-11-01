@@ -11,8 +11,8 @@ Existem dois tipos de batalha, e as rotas são as mesmas para os dois:
   quem entrou é o time **B**. Nasce no módulo de salas (`src/modules/rooms`),
   quando os dois avisam que estão prontos, ou na fila ranqueada
   (`src/modules/ranked`), quando dois jogadores são pareados; aí vem com
-  `ranked: true`, vale pontos e tem prazo para jogar. Não há rota para criar
-  uma direto.
+  `ranked: true` e vale pontos. Nas duas, cada vez tem prazo (veja "Prazo da
+  vez entre jogadores"). Não há rota para criar uma direto.
 
 Em toda resposta, `playerTeam` diz de que lado está quem fez a requisição.
 
@@ -44,7 +44,6 @@ ranqueada e das estatísticas respondem 500. O resto da API não é afetado.
 | GET | `/api/battles/:id/replay` | A batalha encerrada, do começo ao fim, para assistir de novo. |
 | POST | `/api/battles/:id/actions` | Envia a jogada da unidade da vez. |
 | POST | `/api/battles/:id/surrender` | Desiste: a batalha termina como derrota de quem desistiu. |
-| POST | `/api/battles/:id/timeout` | Partida ranqueada: o adversário passou do prazo e quem espera pede a vitória. |
 
 ### Criar
 
@@ -229,24 +228,29 @@ Responde 409 (`REPLAY_UNAVAILABLE`) enquanto a batalha está em andamento e
 para as batalhas criadas antes de o replay existir, que não guardaram o
 começo. A listagem (`GET /api/battles`) e cada batalha trazem `hasReplay`.
 
-### Partida ranqueada: pontos e prazo
+### Partida ranqueada: pontos
 
-Uma batalha com `ranked: true` nasce na fila ranqueada e muda duas coisas:
+Uma batalha com `ranked: true` nasce na fila ranqueada. Quando ela acaba, o
+serviço avisa a ranqueada (`BattleService.onFinished`), que lança os pontos
+dos dois jogadores. A batalha passa a trazer `ratingChange`: quantos pontos
+quem pediu ganhou ou perdeu (negativo). Desistência conta como derrota.
 
-- **Pontos.** Quando ela acaba, o serviço avisa a ranqueada
-  (`BattleService.onFinished`), que lança os pontos dos dois jogadores. A
-  batalha passa a trazer `ratingChange`: quantos pontos quem pediu ganhou ou
-  perdeu (negativo). Desistência e tempo esgotado contam como derrota.
-- **Prazo.** Quem está na vez tem 90 segundos para jogar
-  (`RANKED_TURN_LIMIT_MS`); o relógio zera a cada jogada gravada.
-  `turnTimeLeftMs` diz quanto falta. Passado o prazo, quem está esperando
-  chama `POST /api/battles/:id/timeout` e vence: a batalha termina como uma
-  desistência do time que travou, com `state.timedOut: true`. Antes do prazo a
-  rota responde 409 (`TIMEOUT_TOO_EARLY`); em batalha que não é ranqueada, já
-  acabou, ou na própria vez de quem pediu, 409 (`TIMEOUT_NOT_ALLOWED`).
+### Prazo da vez entre jogadores
 
-Não há tarefa rodando sozinha no servidor: quem pede a vitória é a tela do
-jogador que está esperando, quando o relógio dela chega a zero.
+Em toda batalha entre jogadores (casual ou ranqueada), quem está na vez tem
+30 segundos para jogar (`PVP_TURN_LIMIT_MS`); o relógio zera a cada jogada
+gravada, e `turnTimeLeftMs` diz quanto falta (contra a IA vem `null`).
+
+Passado o prazo, a jogada é feita ao acaso pelo jogador: uma habilidade que a
+unidade da vez pode usar, num alvo possível. No histórico ela vem logo depois
+de um evento `{ "type": "turn_timed_out", "unitId": "A1", "team": "A" }`, para
+as telas mostrarem o que houve. A vez seguinte começa com o prazo cheio, e a
+partida segue: ninguém perde por tempo.
+
+Não há tarefa rodando sozinha no servidor: quem dispara a jogada automática é
+a próxima consulta à batalha (`GET /:id` ou `GET /:id/events`), que as telas
+dos dois jogadores repetem. Se as duas chegarem juntas, só uma grava a
+jogada; a outra lê o que ela gravou.
 
 ### Personagens escolhidos
 
@@ -266,7 +270,7 @@ não são gravados.
 | 400 | `INVALID_TEAM`, `UNKNOWN_CHARACTER`, `INVALID_ACTION` e as regras do jogo: `NOT_YOUR_TURN`, `SKILL_NOT_FOUND`, `NOT_ENOUGH_ENERGY`, `TARGET_REQUIRED`, `INVALID_TARGET`, `UNIT_NOT_FOUND` |
 | 403 | `NOT_YOUR_UNIT` |
 | 404 | `BATTLE_NOT_FOUND` (inclui batalha de outro jogador) |
-| 409 | `BATTLE_OVER`, `BATTLE_CONFLICT` (duas jogadas simultâneas na mesma vez), `REPLAY_UNAVAILABLE`, `TIMEOUT_TOO_EARLY`, `TIMEOUT_NOT_ALLOWED` |
+| 409 | `BATTLE_OVER`, `BATTLE_CONFLICT` (duas jogadas simultâneas na mesma vez), `REPLAY_UNAVAILABLE` |
 
 As mensagens ficam em `locales/<idioma>/translation.json`, na seção `battle`.
 

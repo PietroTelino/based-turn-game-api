@@ -155,9 +155,9 @@ export interface BattleView {
     /** Batalha da campanha: a fase. */
     campaignStage: number | null;
     /**
-     * Partida ranqueada em andamento: quanto tempo quem está na vez ainda tem
-     * para jogar, em ms. Em zero, o outro lado pode pedir a vitória. `null`
-     * quando não há prazo (batalha comum ou encerrada).
+     * Partida entre jogadores em andamento: quanto tempo quem está na vez ainda
+     * tem para jogar, em ms. Em zero, a jogada é feita ao acaso por ele. `null`
+     * quando não há prazo (contra a IA, ou batalha encerrada).
      */
     turnTimeLeftMs: number | null;
     createdAt: Date;
