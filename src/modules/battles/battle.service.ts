@@ -46,6 +46,14 @@ export const TEAM_SIZE = 5;
  * ninguém trava a partida fechando a tela.
  */
 export const PVP_TURN_LIMIT_MS = 30_000;
+/**
+ * Semente fixa da batalha de treino. O tutorial do app é um roteiro, jogada
+ * por jogada (src/battle/tutorial.ts no app): com a mesma semente, os mesmos
+ * times e a IA de treino, que não sorteia nada, a batalha guiada sai sempre
+ * igual, e cada passo do roteiro encontra a situação que ele explica.
+ * Se mudar a semente, os times ou a IA de treino, confira o roteiro no app.
+ */
+export const TUTORIAL_SEED = 4;
 
 const LIST_LIMIT = 20;
 const MAX_AI_ACTIONS_IN_A_ROW = 100;
@@ -172,10 +180,12 @@ export class BattleService {
               : this.pickEnemyTeam(teamA.length);
         const difficulty = input.training ? undefined : (input.difficulty ?? 'normal');
 
+        // O treino sai sempre igual (TUTORIAL_SEED), para o roteiro do tutorial bater.
+        const seed = input.seed ?? (input.training ? TUTORIAL_SEED : undefined);
         const started = createBattle({
             teamA,
             teamB,
-            ...(input.seed !== undefined && { seed: input.seed }),
+            ...(seed !== undefined && { seed }),
         });
 
         // A marca de treino fica no estado: é ela que diz, em cada jogada desta

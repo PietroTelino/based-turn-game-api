@@ -73,6 +73,13 @@ batalha que o tutorial do app cria, com os dois times fixos; a tela mostra o
 guia quando vê a marca. A marca fica dentro do estado gravado, então não
 existe coluna nova no banco para ela.
 
+A batalha de treino usa sempre a mesma semente (`TUTORIAL_SEED`, em
+`battle.service.ts`). Como a IA de treino não sorteia nada, a batalha guiada
+sai igual toda vez, e o roteiro do tutorial no app (que libera uma jogada
+por vez e aponta o alvo certo) encontra em cada passo a situação que ele
+explica. O tutorial só fica concluído quando o jogador vence a batalha de
+treino (`TutorialService.onBattleFinished`); quem perde ou desiste refaz.
+
 ### Nível da IA
 
 ```json

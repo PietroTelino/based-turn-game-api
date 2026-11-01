@@ -9,7 +9,7 @@ import jwt from 'jsonwebtoken';
 import { env } from '../../../config/env';
 import { i18next, middleware } from '../../../config/i18n';
 import { createBattlesRouter } from '../../battles/battle.routes';
-import { BattleService } from '../../battles/battle.service';
+import { BattleService, TUTORIAL_SEED } from '../../battles/battle.service';
 import { InMemoryBattleStore } from '../../battles/tests/in-memory-store';
 import { createTutorialRouter } from '../tutorial.routes';
 import { TutorialService } from '../tutorial.service';
@@ -34,17 +34,36 @@ describe('TutorialService', () => {
         assert.deepEqual(await tutorial.status(PLAYER), { completed: false, completedAt: null });
     });
 
-    it('terminar a batalha de treino, com vitória ou derrota, marca o tutorial como feito', async () => {
-        for (const winner of ['A', 'B'] as const) {
-            const { battleStore, battles, tutorial } = setup();
-            const { battle } = await battles.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], training: true });
-            const record = (await battleStore.findById(battle.id))!;
+    it('vencer a batalha de treino marca o tutorial como feito', async () => {
+        const { battleStore, battles, tutorial } = setup();
+        const { battle } = await battles.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], training: true });
+        const record = (await battleStore.findById(battle.id))!;
 
-            await tutorial.onBattleFinished({ ...record, status: 'finished', winner, state: { ...record.state, winner } });
+        await tutorial.onBattleFinished({ ...record, status: 'finished', winner: 'A', state: { ...record.state, winner: 'A' } });
 
-            assert.equal(await tutorial.isCompleted(PLAYER), true, `vencedor ${winner}`);
-            assert.deepEqual((await tutorial.status(PLAYER)).completedAt, new Date('2026-10-31T12:00:00Z'));
-        }
+        assert.equal(await tutorial.isCompleted(PLAYER), true);
+        assert.deepEqual((await tutorial.status(PLAYER)).completedAt, new Date('2026-10-31T12:00:00Z'));
+    });
+
+    it('perder a batalha de treino não conta: o jogador refaz o tutorial', async () => {
+        const { battleStore, battles, tutorial } = setup();
+        const { battle } = await battles.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], training: true });
+        const record = (await battleStore.findById(battle.id))!;
+
+        await tutorial.onBattleFinished({ ...record, status: 'finished', winner: 'B', state: { ...record.state, winner: 'B' } });
+
+        assert.equal(await tutorial.isCompleted(PLAYER), false);
+    });
+
+    it('a batalha de treino sai sempre igual, para o roteiro do tutorial bater', async () => {
+        const { battleStore, battles } = setup();
+        const rngOf = async (id: string) => (await battleStore.findById(id))!.state.rngState;
+        const first = await battles.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], training: true });
+        const second = await battles.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], training: true });
+        const seeded = await battles.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], seed: TUTORIAL_SEED });
+
+        assert.equal(await rngOf(first.battle.id), await rngOf(second.battle.id));
+        assert.equal(await rngOf(first.battle.id), await rngOf(seeded.battle.id));
     });
 
     it('desistir do treino não conta, e terminar uma batalha comum também não', async () => {

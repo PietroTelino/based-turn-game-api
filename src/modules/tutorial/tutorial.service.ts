@@ -1,4 +1,5 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { PLAYER_TEAM } from '../battles/battle.service';
 import type { BattleRecord } from '../battles/battle.types';
 
 /** Onde fica guardado quando cada jogador terminou o tutorial. */
@@ -18,8 +19,8 @@ export interface TutorialStatus {
 /**
  * O tutorial é obrigatório: enquanto o jogador não termina a batalha de
  * treino, ele não pode começar nenhuma outra partida (rápida, campanha, sala
- * ou ranqueada). A batalha de treino conta quando acaba sem desistência, com
- * vitória ou derrota.
+ * ou ranqueada). A batalha de treino só conta quando o jogador vence: quem
+ * perde ou desiste refaz o tutorial.
  */
 export class TutorialService {
     constructor(
@@ -39,10 +40,12 @@ export class TutorialService {
 
     /**
      * Ouvinte do fim das batalhas (BattleService.onFinished): a batalha de
-     * treino que acabou sem desistência marca o tutorial como feito.
+     * treino que o jogador venceu marca o tutorial como feito. O jogador é
+     * sempre o time A (PLAYER_TEAM); a vitória por desistência da IA não
+     * existe, porque a IA nunca desiste.
      */
     async onBattleFinished(record: BattleRecord): Promise<void> {
-        if (record.state.training && record.state.surrenderedBy === undefined) {
+        if (record.state.training && record.winner === PLAYER_TEAM) {
             await this.store.markCompleted(record.userId, this.now());
         }
     }
