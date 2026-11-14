@@ -518,6 +518,8 @@ export interface BattleState {
     /** Batalha da torre: o andar (1, 2...) e os modificadores dele (data/tower.ts). O motor não usa. */
     towerFloor?: number;
     towerModifiers?: string[];
+    /** Desafio diário: o dia ("2026-11-14"). Os modificadores dele ficam em `towerModifiers`. */
+    challengeDay?: string;
     /** Estado do gerador de números aleatórios (ver rng.ts). */
     rngState: number;
 }

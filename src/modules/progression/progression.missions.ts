@@ -72,6 +72,25 @@ export const STAR_CHESTS: readonly { at: number; gold: number; diamonds: number 
     { at: 36, gold: 1000, diamonds: 30 },
 ];
 
+/** O prêmio de cada dia da sequência de login (do 1º ao 7º). Depois do 7º, recomeça no 1º. */
+export const LOGIN_REWARDS: readonly { gold: number; diamonds: number }[] = [
+    { gold: 50, diamonds: 0 },
+    { gold: 75, diamonds: 0 },
+    { gold: 100, diamonds: 0 },
+    { gold: 125, diamonds: 0 },
+    { gold: 150, diamonds: 0 },
+    { gold: 200, diamonds: 0 },
+    { gold: 300, diamonds: 10 },
+];
+
+/**
+ * O dia da sequência que o jogador resgata hoje: o seguinte ao último, se o
+ * último foi ontem; senão (pulou um dia, ou nunca resgatou), o 1º.
+ */
+export function nextLoginDay(streak: number, lastDay: string | null, yesterday: string): number {
+    return lastDay === yesterday ? (streak % LOGIN_REWARDS.length) + 1 : 1;
+}
+
 /** Estrelas de uma fase vencida: fácil 1, normal 2, difícil 3 (vale a melhor). */
 export const STARS_BY_DIFFICULTY: Record<string, number> = { easy: 1, normal: 2, hard: 3 };
 

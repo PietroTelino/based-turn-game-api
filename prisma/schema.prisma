@@ -36,6 +36,11 @@ model User {
   // temporada vira, o resultado vai para ranked_season_results e os pontos caem pela metade.
   rankedSeason String? @map("ranked_season")
 
+  // Login diário: em que dia da sequência (1 a 7) o jogador está e o último dia (UTC,
+  // "2026-11-14") em que resgatou o prêmio. Pular um dia volta a sequência para o 1.
+  loginStreak  Int     @default(0) @map("login_streak")
+  loginLastDay String? @map("login_last_day")
+
   // Recursos: o ouro se ganha jogando; os diamantes são o recurso pago (por enquanto, só
   // conquistas raras e o administrador dão diamantes).
   gold     Int @default(0)
@@ -158,6 +163,8 @@ model Battle {
   campaignStage Int?    @map("campaign_stage")
   // Batalha da torre: o andar (1, 2...). Vazio nas outras.
   towerFloor    Int?    @map("tower_floor")
+  // Desafio diário: o dia (UTC, "2026-11-14") do desafio. Vazio nas outras.
+  challengeDay  String? @map("challenge_day")
 
   picks BattlePick[]
 
@@ -169,6 +176,7 @@ model Battle {
   @@index([opponentId, createdAt])
   @@index([userId, campaignStage])
   @@index([userId, towerFloor])
+  @@index([challengeDay])
   @@map("battles")
 }
 

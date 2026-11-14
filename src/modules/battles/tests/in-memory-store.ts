@@ -35,6 +35,7 @@ export class InMemoryBattleStore implements BattleStore {
             difficulty: extra.difficulty ?? null,
             campaignStage: extra.campaignStage ?? null,
             towerFloor: extra.towerFloor ?? null,
+            challengeDay: extra.challengeDay ?? null,
             createdAt: now,
             updatedAt: now,
         };
@@ -64,6 +65,18 @@ export class InMemoryBattleStore implements BattleStore {
             .reverse()
             .slice(0, limit)
             .map(({ state: _state, events: _events, ...summary }) => summary);
+    }
+
+    async findChallengeResults(day: string) {
+        const best = new Map<string, number>();
+
+        for (const record of this.rows.values()) {
+            if (record.challengeDay !== day || record.opponentId !== null || record.status !== 'finished' || record.winner !== 'A') continue;
+
+            best.set(record.userId, Math.min(best.get(record.userId) ?? Infinity, record.turn));
+        }
+
+        return [...best].map(([userId, turns]) => ({ userId, name: userId, turns })).sort((a, b) => a.turns - b.turns || a.userId.localeCompare(b.userId));
     }
 
     async findTowerBest(userId: string): Promise<number> {

@@ -19,6 +19,7 @@ const SUMMARY_FIELDS = {
     difficulty: true,
     campaignStage: true,
     towerFloor: true,
+    challengeDay: true,
     createdAt: true,
     updatedAt: true,
     finishedAt: true,
@@ -46,6 +47,7 @@ function toSummary(row: SummaryRow): BattleSummaryRow {
         difficulty: row.difficulty as AiDifficulty | null,
         campaignStage: row.campaignStage,
         towerFloor: row.towerFloor,
+        challengeDay: row.challengeDay,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         finishedAt: row.finishedAt,
@@ -91,6 +93,7 @@ export class BattleRepository implements BattleStore {
                 difficulty: extra.difficulty ?? null,
                 campaignStage: extra.campaignStage ?? null,
                 towerFloor: extra.towerFloor ?? null,
+                challengeDay: extra.challengeDay ?? null,
                 // Os personagens escolhidos entram junto com a batalha, na mesma gravação.
                 picks: { create: extra.picks.map((pick) => ({ userId: pick.userId, characterId: pick.characterId })) },
             },
@@ -141,6 +144,20 @@ export class BattleRepository implements BattleStore {
         });
 
         return row._max.towerFloor ?? 0;
+    }
+
+    async findChallengeResults(day: string) {
+        const rows = await prisma.battle.groupBy({
+            by: ['userId'],
+            where: { challengeDay: day, opponentId: null, status: 'finished', winner: 'A' },
+            _min: { turn: true },
+        });
+        const users = await prisma.user.findMany({ where: { id: { in: rows.map((row) => row.userId) } }, select: { id: true, name: true } });
+        const names = new Map(users.map((user) => [user.id, user.name]));
+
+        return rows
+            .map((row) => ({ userId: row.userId, name: names.get(row.userId) ?? '', turns: row._min?.turn ?? 0 }))
+            .sort((a, b) => a.turns - b.turns || a.name.localeCompare(b.name));
     }
 
     async saveIfStep(id: string, expectedStep: number, snapshot: BattleSnapshot, events: BattleEvent[]): Promise<BattleRecord | null> {

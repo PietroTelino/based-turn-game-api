@@ -1,9 +1,11 @@
-import { CAMPAIGN, towerFloor } from '../../game';
+import { CAMPAIGN, dailyChallenge, towerFloor } from '../../game';
 import type { BattleRecord } from '../battles/battle.types';
 import { ACHIEVEMENTS, CHARACTER_REFUND_GOLD, STARTER_CHARACTERS, battleGold, priceOf } from './progression.catalog';
 import type { Achievement, AchievementMetric, AchievementReward } from './progression.catalog';
 import {
     DAILY_MISSIONS,
+    LOGIN_REWARDS,
+    nextLoginDay,
     STARS_BY_DIFFICULTY,
     STAR_CHESTS,
     WEEKLY_MISSIONS,
@@ -54,6 +56,10 @@ export interface ProgressionStore {
     claimed(userId: string, keys: string[]): Promise<string[]>;
     /** Resgata uma recompensa uma vez só: grava a chave e paga juntos. `false` se já tinha resgatado. */
     claim(userId: string, key: string, gold: number, diamonds: number): Promise<boolean>;
+    /** Em que dia da sequência de login o jogador está e o último dia em que resgatou. */
+    loginState(userId: string): Promise<{ streak: number; lastDay: string | null }>;
+    /** Grava o login de hoje e paga, só se o último dia ainda for `expectedLastDay`. Devolve se gravou. */
+    saveLogin(userId: string, expectedLastDay: string | null, streak: number, today: string, gold: number, diamonds: number): Promise<boolean>;
 }
 
 export class ProgressionError extends Error {
@@ -115,6 +121,17 @@ export interface ProgressionView {
     shop: { characterId: string; gold: number; diamonds: number; owned: boolean; achievementId: string | null }[];
     missions: { daily: MissionView[]; weekly: MissionView[]; dailyResetsAt: Date; weeklyResetsAt: Date };
     stars: StarsView;
+    login: LoginView;
+}
+
+/** O prêmio do login diário: a sequência de 7 dias e onde o jogador está nela. */
+export interface LoginView {
+    /** O dia da sequência de hoje (1 a 7): o já resgatado, ou o que será resgatado. */
+    day: number;
+    claimedToday: boolean;
+    rewards: { gold: number; diamonds: number }[];
+    /** Quando o dia vira (meia-noite UTC). */
+    resetsAt: Date;
 }
 
 /** O que o jogador pede para resgatar. */
@@ -158,13 +175,14 @@ export class ProgressionService {
     async view(userId: string): Promise<ProgressionView> {
         await this.checkAchievements(userId);
 
-        const [wallet, owned, done, metrics, missions, stars] = await Promise.all([
+        const [wallet, owned, done, metrics, missions, stars, login] = await Promise.all([
             this.store.wallet(userId),
             this.owned(userId),
             this.store.completed(userId),
             this.metrics(userId),
             this.missions(userId),
             this.stars(userId),
+            this.login(userId),
         ]);
         const doneAt = new Map(done.map((item) => [item.achievementId, item.completedAt]));
 
@@ -187,7 +205,47 @@ export class ProgressionService {
                 .map((id) => ({ characterId: id, ...priceOf(id)!, owned: owned.includes(id), achievementId: ACHIEVEMENTS.find((a) => a.reward.character === id)?.id ?? null })),
             missions,
             stars,
+            login,
         };
+    }
+
+    /** Resgata o prêmio do login de hoje (o próximo dia da sequência). */
+    async claimLogin(userId: string): Promise<ProgressionView> {
+        const { today, yesterday } = this.days();
+        const state = await this.store.loginState(userId);
+
+        if (state.lastDay === today) throw new ProgressionError('ALREADY_CLAIMED', 409, 'progression.alreadyClaimed');
+
+        const day = nextLoginDay(state.streak, state.lastDay, yesterday);
+        const reward = LOGIN_REWARDS[day - 1]!;
+
+        // Duas requisições juntas: só a primeira grava (a outra encontra o dia já mudado).
+        if (!(await this.store.saveLogin(userId, state.lastDay, day, today, reward.gold, reward.diamonds))) {
+            throw new ProgressionError('ALREADY_CLAIMED', 409, 'progression.alreadyClaimed');
+        }
+
+        return this.view(userId);
+    }
+
+    private async login(userId: string): Promise<LoginView> {
+        const { today, yesterday, tomorrow } = this.days();
+        const state = await this.store.loginState(userId);
+        const claimedToday = state.lastDay === today;
+
+        return {
+            day: claimedToday ? state.streak : nextLoginDay(state.streak, state.lastDay, yesterday),
+            claimedToday,
+            rewards: [...LOGIN_REWARDS],
+            resetsAt: tomorrow,
+        };
+    }
+
+    /** Hoje, ontem e o começo de amanhã, em UTC. */
+    private days() {
+        const start = dailyPeriod(this.now()).start;
+        const key = (date: Date) => date.toISOString().slice(0, 10);
+
+        return { today: key(start), yesterday: key(new Date(start.getTime() - 86_400_000)), tomorrow: new Date(start.getTime() + 86_400_000) };
     }
 
     async buy(userId: string, characterId: string, currency: Currency): Promise<ProgressionView> {
@@ -270,6 +328,13 @@ export class ProgressionService {
                 const { reward } = towerFloor(battle.towerFloor, this.characterIds());
 
                 if (await this.store.claim(userId, `torre:${battle.towerFloor}`, 0, reward.diamonds)) gold += reward.gold;
+            }
+
+            // Desafio do dia vencido: o prêmio do desafio, só na primeira vitória do dia.
+            if (won && battle.challengeDay) {
+                const { reward } = dailyChallenge(battle.challengeDay, this.characterIds());
+
+                if (await this.store.claim(userId, `desafio:${battle.challengeDay}`, 0, reward.diamonds)) gold += reward.gold;
             }
 
             if (await this.store.payBattle(battle.id, userId, gold)) {

@@ -12,6 +12,7 @@ import {
     getBoss,
     towerFloor,
     applyTowerModifiers,
+    dailyChallenge,
     getAvailableActions,
     getFuryBonus,
     surrender,
@@ -31,6 +32,7 @@ import type {
     PublicBattleState,
     ReplayResponse,
     TowerView,
+    ChallengeView,
 } from './battle.types';
 
 /**
@@ -96,6 +98,8 @@ export interface CreateBattleInput {
     campaignStage?: number;
     /** Um andar da torre: o próximo que o jogador ainda não venceu. Time, cenário e nível são os do andar. */
     towerFloor?: number;
+    /** O desafio do dia: time inimigo, cenário, nível e modificadores são os do desafio. */
+    challenge?: boolean;
 }
 
 /**
@@ -204,6 +208,33 @@ export class BattleService {
         }));
     }
 
+    /** O desafio do dia, com a melhor vitória do jogador e o placar. */
+    async challenge(userId: string, limit = 20): Promise<ChallengeView> {
+        const today = this.today();
+        const challenge = dailyChallenge(today, CHARACTERS.map((character) => character.id));
+        const results = await this.store.findChallengeResults(today);
+        const mine = results.findIndex((row) => row.userId === userId);
+
+        return {
+            day: today,
+            enemyTeam: challenge.enemyTeam,
+            arena: challenge.arena,
+            difficulty: challenge.difficulty,
+            modifiers: challenge.modifiers,
+            scalePercent: Math.round((challenge.scale - 1) * 100),
+            reward: challenge.reward,
+            best: mine >= 0 ? results[mine]!.turns : null,
+            leaderboard: results.slice(0, limit).map((row, index) => ({ position: index + 1, ...row })),
+            you: mine >= 0 ? { position: mine + 1, turns: results[mine]!.turns } : null,
+            resetsAt: new Date(Date.parse(`${today}T00:00:00Z`) + 86_400_000),
+        };
+    }
+
+    /** O dia de hoje em UTC ("2026-11-14"): é por ele que o desafio troca. */
+    private today(): string {
+        return this.now().toISOString().slice(0, 10);
+    }
+
     /** A torre: o andar mais alto vencido e o próximo, com o time e os modificadores dele. */
     async tower(userId: string): Promise<TowerView> {
         const best = await this.store.findTowerBest(userId);
@@ -233,12 +264,15 @@ export class BattleService {
 
         const stage = input.campaignStage !== undefined ? await this.openStage(userId, input.campaignStage) : undefined;
         const floor = input.towerFloor !== undefined && !stage ? await this.openFloor(userId, input.towerFloor) : undefined;
+        const challenge = input.challenge && !stage && !floor ? dailyChallenge(this.today(), CHARACTERS.map((character) => character.id)) : undefined;
         // A fase e o andar têm o time deles. Nos testes de 1 contra 1, entram só os primeiros.
         let teamB = stage
             ? this.resolveTeam(stage.enemyTeam.slice(0, this.teamSize))
             : floor
               ? applyTowerModifiers(this.resolveTeam(floor.enemyTeam.slice(0, this.teamSize)), floor)
-              : input.enemyTeam
+              : challenge
+                ? applyTowerModifiers(this.resolveTeam(challenge.enemyTeam.slice(0, this.teamSize)), challenge)
+                : input.enemyTeam
                 ? this.resolveTeam(input.enemyTeam)
                 : this.pickEnemyTeam(teamA.length);
 
@@ -249,7 +283,7 @@ export class BattleService {
             teamB = teamB.map((character, index) => (index === stage.boss!.slot ? boss : character));
         }
 
-        const difficulty = input.training ? undefined : floor ? floor.difficulty : (input.difficulty ?? 'normal');
+        const difficulty = input.training ? undefined : floor ? floor.difficulty : challenge ? challenge.difficulty : (input.difficulty ?? 'normal');
 
         // O treino sai sempre igual (TUTORIAL_SEED), para o roteiro do tutorial bater.
         const seed = input.seed ?? (input.training ? TUTORIAL_SEED : undefined);
@@ -279,9 +313,14 @@ export class BattleService {
             started.state.towerModifiers = floor.modifiers;
         }
 
+        if (challenge) {
+            started.state.challengeDay = challenge.day;
+            started.state.towerModifiers = challenge.modifiers;
+        }
+
         // O cenário é sorteado depois do time da IA, para não mudar o time que sai de um mesmo sorteio.
         // A fase da campanha e o andar da torre têm o seu.
-        started.state.arena = stage ? stage.arena : floor ? floor.arena : this.pickArena();
+        started.state.arena = stage ? stage.arena : floor ? floor.arena : challenge ? challenge.arena : this.pickArena();
 
         // Se as unidades da IA forem as primeiras da ordem, ela já abre a batalha.
         const { state, events } = this.playAiActions(started);
@@ -293,6 +332,7 @@ export class BattleService {
             ...(difficulty && { difficulty }),
             ...(stage && { campaignStage: stage.stage }),
             ...(floor && { towerFloor: floor.floor }),
+            ...(challenge && { challengeDay: challenge.day }),
         });
 
         return { battle: this.toView(record, PLAYER_TEAM), events };
@@ -562,6 +602,7 @@ export class BattleService {
             difficulty: record.difficulty,
             campaignStage: record.campaignStage,
             towerFloor: record.towerFloor,
+            challengeDay: record.challengeDay,
             spectating,
             turnTimeLeftMs: hasDeadline ? this.turnTimeLeft(record) : null,
             createdAt: record.createdAt,

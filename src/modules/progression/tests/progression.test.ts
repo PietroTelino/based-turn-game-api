@@ -50,6 +50,17 @@ class MemoryStore implements ProgressionStore {
     finished: FinishedBattle[] = [];
     clears: { stage: number; difficulty: string }[] = [];
     claims = new Set<string>();
+    loginStreak = 0;
+    loginLastDay: string | null = null;
+    async loginState() { return { streak: this.loginStreak, lastDay: this.loginLastDay }; }
+    async saveLogin(_u: string, expected: string | null, streak: number, today: string, gold: number, diamonds: number) {
+        if (this.loginLastDay !== expected) return false;
+        this.loginStreak = streak;
+        this.loginLastDay = today;
+        this.gold += gold;
+        this.diamonds += diamonds;
+        return true;
+    }
     async finishedSince(_u: string, since: Date) { return this.finished.filter((b) => b.finishedAt >= since); }
     async campaignClears() { return this.clears; }
     async claimed(_u: string, keys: string[]) { return keys.filter((k) => this.claims.has(k)); }
@@ -184,6 +195,45 @@ describe('ProgressionService', () => {
         await service.claim(ANA, { type: 'chest', at: 10 });
         assert.equal(store.gold, 200);
         await assert.rejects(service.claim(ANA, { type: 'chest', at: 20 }), /notCompleted/);
+    });
+
+    it('o login diário segue a sequência de 7 dias, uma vez por dia, e recomeça quando o jogador pula um dia', async () => {
+        const { store, service } = setup();
+
+        assert.deepEqual([(await service.view(ANA)).login.day, (await service.view(ANA)).login.claimedToday], [1, false]);
+
+        let view = await service.claimLogin(ANA);
+
+        assert.deepEqual([view.login.day, view.login.claimedToday, store.gold], [1, true, 50]);
+        await assert.rejects(service.claimLogin(ANA), /alreadyClaimed/);
+
+        // Ontem foi o 6º dia: hoje é o 7º, o do baú grande.
+        store.loginStreak = 6;
+        store.loginLastDay = '2026-11-13';
+        view = await service.claimLogin(ANA);
+        assert.equal(view.login.day, 7);
+        assert.equal(store.diamonds, 10);
+
+        // Depois do 7º, recomeça no 1º.
+        store.loginStreak = 7;
+        store.loginLastDay = '2026-11-13';
+        assert.equal((await service.view(ANA)).login.day, 1);
+
+        // Pulou um dia: volta para o 1º.
+        store.loginStreak = 4;
+        store.loginLastDay = '2026-11-10';
+        assert.equal((await service.view(ANA)).login.day, 1);
+    });
+
+    it('vencer o desafio do dia paga o prêmio só na primeira vitória', async () => {
+        const { store, service } = setup();
+
+        await service.onBattleFinished(battle({ id: 'c1', challengeDay: '2026-11-14', difficulty: 'hard' }));
+        // 60 da vitória no difícil + 150 do desafio, e 5 diamantes.
+        assert.deepEqual([store.gold, store.diamonds], [210, 5]);
+
+        await service.onBattleFinished(battle({ id: 'c2', challengeDay: '2026-11-14', difficulty: 'hard' }));
+        assert.equal(store.gold, 270);
     });
 
     it('vencer um andar da torre paga o prêmio do andar uma vez só', async () => {

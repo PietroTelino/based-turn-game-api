@@ -50,7 +50,7 @@ export class BattleController {
                 return res.status(401).json({ message: req.t('auth.notAuthenticated') });
             }
 
-            const { team, enemyTeam, training, difficulty, campaignStage, towerFloor } = req.body ?? {};
+            const { team, enemyTeam, training, difficulty, campaignStage, towerFloor, challenge } = req.body ?? {};
 
             if (!isStringArray(team) || (enemyTeam !== undefined && !isStringArray(enemyTeam))) {
                 throw new BattleError('INVALID_TEAM', 400, 'battle.teamRequired');
@@ -76,6 +76,7 @@ export class BattleController {
                 ...(difficulty !== undefined && { difficulty }),
                 ...(campaignStage !== undefined && { campaignStage: campaignStage as number }),
                 ...(towerFloor !== undefined && { towerFloor: towerFloor as number }),
+                ...(challenge === true && { challenge: true }),
             });
 
             return res.status(201).json(result);
@@ -133,6 +134,19 @@ export class BattleController {
     };
 
     /** GET /:id/replay — a batalha encerrada do começo ao fim, para assistir de novo. */
+    /** GET /challenge — o desafio do dia e o placar dele. */
+    challenge = async (req: Request, res: Response) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
+            }
+
+            return res.json(await this.service.challenge(req.user.id));
+        } catch (error) {
+            return this.handleError(req, res, error);
+        }
+    };
+
     /** GET /tower — o andar mais alto vencido e o próximo. */
     tower = async (req: Request, res: Response) => {
         try {

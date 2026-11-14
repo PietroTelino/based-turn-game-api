@@ -86,7 +86,7 @@ export function towerFloor(floor: number, characterIds: readonly string[]): Towe
 }
 
 /** O time inimigo com a escala e os modificadores do andar aplicados (cópias: o catálogo não muda). */
-export function applyTowerModifiers(team: CharacterDefinition[], floor: TowerFloor): CharacterDefinition[] {
+export function applyTowerModifiers(team: CharacterDefinition[], floor: Pick<TowerFloor, 'modifiers' | 'scale'>): CharacterDefinition[] {
     const mods = TOWER_MODIFIERS.filter((mod) => floor.modifiers.includes(mod.id));
     const factor = (key: 'hp' | 'atk' | 'def' | 'speed') => mods.reduce((total, mod) => total * (mod[key] ?? 1), 1);
 

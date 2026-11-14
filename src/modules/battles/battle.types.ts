@@ -41,6 +41,8 @@ export interface NewBattle {
     campaignStage?: number;
     /** Batalha da torre: o andar. */
     towerFloor?: number;
+    /** Desafio diário: o dia. */
+    challengeDay?: string;
 }
 
 /** Uma batalha como está guardada no banco. */
@@ -70,6 +72,8 @@ export interface BattleRecord extends BattleSnapshot {
     campaignStage: number | null;
     /** Batalha da torre: o andar. Vazio nas outras. */
     towerFloor: number | null;
+    /** Desafio diário: o dia ("2026-11-14"). Vazio nas outras. */
+    challengeDay: string | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -101,6 +105,8 @@ export interface BattleStore {
     findCampaignWins(userId: string): Promise<CampaignWin[]>;
     /** O andar mais alto da torre que o jogador já venceu (0 se nenhum). */
     findTowerBest(userId: string): Promise<number>;
+    /** Quem venceu o desafio do dia, com o menor número de turnos de cada um, do melhor para o pior. */
+    findChallengeResults(day: string): Promise<{ userId: string; name: string; turns: number }[]>;
     /**
      * Grava só se a batalha ainda estiver em andamento e na vez esperada.
      * Devolve null quando outra requisição gravou antes. `events` passa a ser
@@ -127,6 +133,25 @@ export interface CampaignStageView {
     clearedOn: AiDifficulty[];
     /** O chefe da fase, quando ela tem: a posição no time inimigo e o nome. */
     boss: { slot: number; name: string } | null;
+}
+
+/** O desafio do dia como o jogador o vê, com o placar. */
+export interface ChallengeView {
+    day: string;
+    enemyTeam: string[];
+    arena: ArenaId;
+    difficulty: AiDifficulty;
+    modifiers: string[];
+    scalePercent: number;
+    reward: { gold: number; diamonds: number };
+    /** A melhor vitória do jogador hoje, em turnos. `null` se ainda não venceu. */
+    best: number | null;
+    /** Os melhores do dia (menos turnos primeiro). */
+    leaderboard: { position: number; userId: string; name: string; turns: number }[];
+    /** A posição do jogador, se já venceu hoje. */
+    you: { position: number; turns: number } | null;
+    /** Quando o desafio troca (meia-noite UTC). */
+    resetsAt: Date;
 }
 
 /** A torre como o jogador a vê: até onde chegou e o próximo andar. */
@@ -178,6 +203,7 @@ export interface BattleView {
     /** Batalha da campanha: a fase. */
     campaignStage: number | null;
     towerFloor: number | null;
+    challengeDay: string | null;
     /** Quem pediu só assiste (é amigo de quem joga): nada para escolher, o lado mostrado é o A. */
     spectating: boolean;
     /**

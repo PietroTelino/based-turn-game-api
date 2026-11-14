@@ -1044,3 +1044,44 @@ describe('BattleService: chefes, torre e espectador', () => {
         assert.equal((await service.watch(PLAYER, battle.id, 0)).battle.spectating, false);
     });
 });
+
+describe('BattleService: desafio diário', () => {
+    it('o desafio é o mesmo para todos no mesmo dia; o placar é de quem venceu em menos turnos', async () => {
+        const store = new InMemoryBattleStore();
+        const now = () => new Date('2026-11-14T15:00:00Z');
+        const service = new BattleService(store, () => 0, { teamSize: TEAM_SIZE, now });
+
+        const view = await service.challenge(PLAYER);
+
+        assert.equal(view.day, '2026-11-14');
+        assert.equal(view.difficulty, 'hard');
+        assert.equal(view.modifiers.length, 2);
+        assert.deepEqual((await service.challenge(OTHER_PLAYER)).enemyTeam, view.enemyTeam, 'o mesmo time para todos');
+        assert.equal(view.best, null);
+        assert.equal(view.resetsAt.toISOString(), '2026-11-15T00:00:00.000Z');
+
+        const first = await service.create(PLAYER, { team: FIVE, challenge: true, difficulty: 'easy' });
+
+        assert.equal(first.battle.challengeDay, '2026-11-14');
+        assert.equal(first.battle.difficulty, 'hard', 'o nível é o do desafio');
+        assert.deepEqual(first.battle.state.units.filter((u) => u.team === 'B').map((u) => u.characterId), view.enemyTeam);
+
+        store.patch(first.battle.id, { status: 'finished', winner: 'A', turn: 9 });
+
+        const other = await service.create(OTHER_PLAYER, { team: FIVE, challenge: true });
+
+        store.patch(other.battle.id, { status: 'finished', winner: 'A', turn: 6 });
+
+        const again = await service.create(PLAYER, { team: FIVE, challenge: true });
+
+        store.patch(again.battle.id, { status: 'finished', winner: 'A', turn: 7 });
+
+        const board = await service.challenge(PLAYER);
+
+        assert.deepEqual(board.leaderboard.map((row) => [row.position, row.userId, row.turns]), [
+            [1, OTHER_PLAYER, 6],
+            [2, PLAYER, 7],
+        ]);
+        assert.deepEqual([board.best, board.you], [7, { position: 2, turns: 7 }]);
+    });
+});

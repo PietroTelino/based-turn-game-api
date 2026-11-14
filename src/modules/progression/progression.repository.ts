@@ -168,6 +168,21 @@ export class ProgressionRepository implements ProgressionStore {
         });
     }
 
+    async loginState(userId: string) {
+        const user = await prisma.user.findUnique({ where: { id: userId }, select: { loginStreak: true, loginLastDay: true } });
+
+        return { streak: user?.loginStreak ?? 0, lastDay: user?.loginLastDay ?? null };
+    }
+
+    async saveLogin(userId: string, expectedLastDay: string | null, streak: number, today: string, gold: number, diamonds: number) {
+        const { count } = await prisma.user.updateMany({
+            where: { id: userId, loginLastDay: expectedLastDay },
+            data: { loginStreak: streak, loginLastDay: today, gold: { increment: gold }, diamonds: { increment: diamonds } },
+        });
+
+        return count === 1;
+    }
+
     async battleReward(battleId: string, userId: string) {
         const row = await prisma.battleReward.findUnique({ where: { battleId_userId: { battleId, userId } } });
 
