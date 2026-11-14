@@ -95,11 +95,12 @@ export class InMemoryRankedStore implements RankedStore {
         }
     }
 
-    async createDraft(hostId: string, guestId: string, now: Date): Promise<RankedDraft> {
+    async createDraft(hostId: string, guestId: string, now: Date, ranked = true): Promise<RankedDraft> {
         const draft: RankedDraft = {
             id: randomUUID(),
             hostId,
             guestId,
+            ranked,
             actions: [],
             status: 'drafting',
             battleId: null,

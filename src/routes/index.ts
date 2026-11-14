@@ -19,6 +19,9 @@ import { StatsService } from '../modules/stats/stats.service';
 import { createTutorialRouter } from '../modules/tutorial/tutorial.routes';
 import { TutorialRepository } from '../modules/tutorial/tutorial.repository';
 import { TutorialService } from '../modules/tutorial/tutorial.service';
+import { createProgressionRouter } from '../modules/progression/progression.routes';
+import { ProgressionRepository } from '../modules/progression/progression.repository';
+import { ProgressionService } from '../modules/progression/progression.service';
 import { prisma } from '../prisma';
 
 export const router = Router();
@@ -48,11 +51,19 @@ const tutorialService = new TutorialService(new TutorialRepository());
 battleService.onFinished((battle) => rankedService.settle(battle));
 battleService.onFinished((battle) => tutorialService.onBattleFinished(battle));
 
+// Progressão: o ouro de cada batalha e as conquistas; e só joga com quem desbloqueou
+// (na ranqueada a seleção é com todos os personagens, para ninguém ficar sem time).
+const progressionService = new ProgressionService(new ProgressionRepository(), () => battleService.listCharacters().map((c) => c.id));
+
+battleService.onFinished((battle) => progressionService.onBattleFinished(battle));
+battleService.setAccessCheck((userId, team) => progressionService.lockedOf(userId, team));
+
 // O tutorial é obrigatório: sem ele, não dá para começar nenhuma partida além da de treino.
 const tutorialGuard = tutorialService.guard();
 
 router.use('/tutorial', createTutorialRouter(tutorialService));
 router.use('/battles', createBattlesRouter(battleService, tutorialService.guard((req) => req.body?.training === true)));
-router.use('/rooms', createRoomsRouter(new RoomService(new RoomRepository(), battleService), tutorialGuard));
+router.use('/rooms', createRoomsRouter(new RoomService(new RoomRepository(), rankedService), tutorialGuard));
 router.use('/ranked', createRankedRouter(rankedService, tutorialGuard));
 router.use('/stats', createStatsRouter(new StatsService(new StatsRepository())));
+router.use('/progression', createProgressionRouter(progressionService));

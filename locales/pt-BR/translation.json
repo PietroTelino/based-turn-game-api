@@ -102,12 +102,14 @@
             "TARGET_REQUIRED": "Escolha um alvo",
             "INVALID_TARGET": "Alvo inválido",
             "SKILL_USED_UP": "Essa habilidade já foi usada nesta batalha"
-        }
+        },
+        "characterLocked": "Você ainda não desbloqueou {{id}}: complete a conquista dele ou compre na loja."
     },
     "room": {
         "notFound": "Sala não encontrada",
         "full": "Essa sala já está cheia",
         "closed": "Essa sala não está mais aberta",
+        "notDrafting": "A seleção começa quando o outro jogador entrar",
         "errorUnexpected": "Erro ao processar a sala"
     },
     "ranked": {
@@ -127,5 +129,17 @@
     },
     "stats": {
         "errorUnexpected": "Erro ao carregar as estatísticas"
+    },
+    "progression": {
+        "characterLocked": "Você ainda não desbloqueou {{id}}: complete a conquista dele ou compre na loja.",
+        "unknownCharacter": "Personagem desconhecido: {{id}}",
+        "notForSale": "Este personagem não está à venda.",
+        "alreadyOwned": "Você já tem este personagem.",
+        "insufficient": {
+            "gold": "Ouro insuficiente.",
+            "diamonds": "Diamantes insuficientes."
+        },
+        "invalidAmount": "Quantidade inválida.",
+        "errorUnexpected": "Erro inesperado na progressão."
     }
 }

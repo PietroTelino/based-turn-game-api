@@ -1,5 +1,6 @@
 import { randomInt } from 'node:crypto';
-import type { BattleService } from '../battles/battle.service';
+import type { RankedService } from '../ranked/ranked.service';
+import type { DraftView } from '../ranked/ranked.types';
 import { RoomError } from './room.errors';
 import type { OpenRoomView, RoomRecord, RoomRole, RoomStore, RoomView } from './room.types';
 
@@ -12,8 +13,8 @@ const LIST_LIMIT = 30;
 /** Sala que ninguém entrou sai da lista depois deste tempo. */
 const LIST_MAX_AGE_MS = 30 * 60 * 1000;
 
-/** O que o serviço de salas usa do serviço de batalhas. */
-type Battles = Pick<BattleService, 'createVersus' | 'validateTeam'>;
+/** O que o serviço de salas usa da seleção de personagens (a mesma da ranqueada). */
+type Drafts = Pick<RankedService, 'startCasualDraft' | 'draftById' | 'draftActionById'>;
 
 function generateCode(): string {
     let code = '';
@@ -35,11 +36,13 @@ function normalizeCode(code: string): string {
  *
  * 1. Um jogador cria a sala e recebe um código.
  * 2. O outro entra, pelo código ou pela lista de salas abertas.
- * 3. Cada um escolhe o time na própria tela e avisa que está pronto. O time
- *    fica guardado aqui, mas o outro só fica sabendo que o jogador está
- *    pronto, nunca o que ele escolheu.
- * 4. Quando os dois estão prontos, a batalha é criada (BattleService) e a sala
- *    passa a apontar para ela.
+ * 3. Ao entrar, começa a seleção de personagens dos dois, a mesma da
+ *    ranqueada (RankedService): banimentos e escolhas alternados, com prazo
+ *    em cada passo. Só que a partida que sai dela não vale pontos.
+ * 4. Quando a seleção acaba, a batalha existe e a sala passa a apontar para ela.
+ *
+ * A tela pergunta pela sala (`get`) e recebe junto a seleção; é essa consulta
+ * que também aplica as escolhas por tempo esgotado.
  */
 export class RoomService {
     private now: () => Date;
@@ -47,7 +50,7 @@ export class RoomService {
 
     constructor(
         private store: RoomStore,
-        private battles: Battles,
+        private drafts: Drafts,
         /** Os testes trocam o relógio e o gerador de códigos; o jogo usa os de verdade. */
         options: { now?: () => Date; newCode?: () => string } = {},
     ) {
@@ -63,7 +66,7 @@ export class RoomService {
             const room = await this.store.create(userId, this.newCode());
 
             if (room) {
-                return toView(room, 'host');
+                return toView(room, 'host', null);
             }
         }
 
@@ -80,10 +83,11 @@ export class RoomService {
             .map((room) => ({ code: room.code, hostName: room.hostName, createdAt: room.createdAt }));
     }
 
+    /** A sala e, durante a seleção, a seleção posta em dia. É a consulta que a tela repete. */
     async get(userId: string, code: string): Promise<RoomView> {
         const { room, role } = await this.findForMember(userId, code);
 
-        return toView(room, role);
+        return this.view(room, role, userId);
     }
 
     async join(userId: string, code: string): Promise<RoomView> {
@@ -97,7 +101,7 @@ export class RoomService {
         const role = roleOf(room, userId);
 
         if (role) {
-            return toView(room, role);
+            return this.view(room, role, userId);
         }
 
         if (room.status === 'closed') {
@@ -112,40 +116,25 @@ export class RoomService {
         return this.get(userId, room.code);
     }
 
-    /**
-     * O jogador confirma o time e avisa que está pronto. Se o outro já estava
-     * pronto, a batalha começa aqui.
-     */
-    async ready(userId: string, code: string, team: string[]): Promise<RoomView> {
+    /** Bane ou escolhe `characterId` no passo da vez da seleção da sala. */
+    async draftAction(userId: string, code: string, characterId: string): Promise<RoomView> {
         const { room, role } = await this.findForMember(userId, code);
+        const current = await this.ensureDraft(room);
 
-        // Lança BattleError (INVALID_TEAM, UNKNOWN_CHARACTER) se o time não serve.
-        this.battles.validateTeam(team);
-
-        if (!(await this.store.setReady(room.id, role, team))) {
-            throw new RoomError('ROOM_CLOSED', 409, 'room.closed');
+        if (current.status !== 'selecting' || !current.draftId) {
+            throw new RoomError(current.status === 'waiting' ? 'ROOM_NOT_DRAFTING' : 'ROOM_CLOSED', 409, current.status === 'waiting' ? 'room.notDrafting' : 'room.closed');
         }
 
-        await this.startIfBothReady(room.code);
+        // Lança RankedError (NOT_YOUR_DRAFT_TURN, INVALID_DRAFT_CHOICE...) se a escolha não vale.
+        const draft = await this.drafts.draftActionById(userId, current.draftId, characterId);
 
-        return this.get(userId, room.code);
-    }
-
-    /** O jogador volta atrás para trocar o time. Depois que a batalha começa, não dá mais. */
-    async unready(userId: string, code: string): Promise<RoomView> {
-        const { room, role } = await this.findForMember(userId, code);
-
-        if (!(await this.store.clearReady(room.id, role))) {
-            throw new RoomError('ROOM_CLOSED', 409, 'room.closed');
-        }
-
-        return this.get(userId, room.code);
+        return toView(await this.startIfDone(current, draft), role, draft);
     }
 
     /**
      * Sair da sala antes de a batalha começar: se for o anfitrião, a sala
-     * fecha; se for o convidado, ela volta a esperar outro. Depois que a
-     * batalha começou, sair da sala não muda nada.
+     * fecha; se for o convidado, ela volta a esperar outro (e a seleção dele
+     * fica para trás). Depois que a batalha começou, sair da sala não muda nada.
      */
     async leave(userId: string, code: string): Promise<void> {
         const { room, role } = await this.findForMember(userId, code);
@@ -157,33 +146,47 @@ export class RoomService {
         }
     }
 
-    private async startIfBothReady(code: string): Promise<void> {
-        const room = await this.store.findByCode(code);
+    /** A sala como `role` a enxerga, com a seleção em dia. */
+    private async view(room: RoomRecord, role: RoomRole, userId: string): Promise<RoomView> {
+        const current = await this.ensureDraft(room);
 
-        if (!room || !room.guestId || !room.hostReady || !room.guestReady || !room.hostTeam || !room.guestTeam) {
-            return;
+        if (current.status !== 'selecting' || !current.draftId) {
+            return toView(current, role, null);
         }
 
-        // Os dois "pronto" podem chegar ao mesmo tempo: só quem consegue o
-        // claimStart cria a batalha, para não nascerem duas.
-        if (!(await this.store.claimStart(room.id))) {
-            return;
+        const draft = await this.drafts.draftById(userId, current.draftId);
+
+        return toView(await this.startIfDone(current, draft), role, draft);
+    }
+
+    /**
+     * Os dois estão na sala e a seleção ainda não existe: cria. Normalmente
+     * acontece logo depois do join; aqui também, caso a criação tenha falhado.
+     */
+    private async ensureDraft(room: RoomRecord): Promise<RoomRecord> {
+        if (room.status !== 'selecting' || !room.guestId || room.draftId) {
+            return room;
         }
 
-        try {
-            const battleId = await this.battles.createVersus({
-                hostId: room.hostId,
-                hostTeam: room.hostTeam,
-                guestId: room.guestId,
-                guestTeam: room.guestTeam,
-            });
+        const draftId = await this.drafts.startCasualDraft(room.hostId, room.guestId);
 
-            await this.store.setStarted(room.id, battleId);
-        } catch (error) {
-            // Sem isto a sala ficaria presa em "starting" para sempre.
-            await this.store.releaseStart(room.id);
-            throw error;
+        if (await this.store.setDraft(room.id, room.guestId, draftId)) {
+            return { ...room, draftId };
         }
+
+        // Outra requisição ligou uma seleção antes (ou o convidado saiu): vale o que está gravado.
+        return (await this.store.findByCode(room.code)) ?? room;
+    }
+
+    /** A seleção acabou e criou a batalha: a sala passa a apontar para ela. */
+    private async startIfDone(room: RoomRecord, draft: DraftView): Promise<RoomRecord> {
+        if (!draft.battleId) {
+            return room;
+        }
+
+        await this.store.setStarted(room.id, draft.battleId);
+
+        return { ...room, status: 'started', battleId: draft.battleId };
     }
 
     /** Busca a sala e garante que quem pediu está nela. */
@@ -207,19 +210,16 @@ function roleOf(room: RoomRecord, userId: string): RoomRole | null {
     return null;
 }
 
-/** A sala como `role` a enxerga: o próprio time, e do outro só o nome e o "pronto". */
-function toView(room: RoomRecord, role: RoomRole): RoomView {
-    const isHost = role === 'host';
-    const ready = isHost ? room.hostReady : room.guestReady;
-    const team = isHost ? room.hostTeam : room.guestTeam;
-    const opponentName = isHost ? room.guestName : room.hostName;
+function toView(room: RoomRecord, role: RoomRole, draft: DraftView | null): RoomView {
+    const opponentName = role === 'host' ? room.guestName : room.hostName;
 
     return {
         code: room.code,
         status: room.status,
         role,
-        you: { ready, team: ready ? team : null },
-        opponent: opponentName === null ? null : { name: opponentName, ready: isHost ? room.guestReady : room.hostReady },
+        opponent: opponentName === null ? null : { name: opponentName },
+        // Depois que a batalha começa a tela vai para ela: a seleção não precisa mais vir.
+        draft: room.status === 'selecting' ? draft : null,
         battleId: room.battleId,
         createdAt: room.createdAt,
     };

@@ -1,6 +1,6 @@
 import { prisma } from '../../prisma';
 import type { Room } from '../../generated/prisma/client';
-import type { RoomRecord, RoomRole, RoomStatus, RoomStore } from './room.types';
+import type { RoomRecord, RoomStatus, RoomStore } from './room.types';
 
 /** Junto com a sala vêm os nomes dos dois jogadores, para mostrar na tela. */
 const WITH_NAMES = {
@@ -22,11 +22,7 @@ function toRecord(row: RoomRow): RoomRecord {
         hostName: row.host.name,
         guestId: row.guestId,
         guestName: row.guest?.name ?? null,
-        // As colunas são Json: o Prisma devolve a lista de ids como foi gravada.
-        hostTeam: row.hostTeam as string[] | null,
-        guestTeam: row.guestTeam as string[] | null,
-        hostReady: row.hostReady,
-        guestReady: row.guestReady,
+        draftId: row.draftId,
         battleId: row.battleId,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
@@ -79,7 +75,16 @@ export class RoomRepository implements RoomStore {
     async join(id: string, guestId: string): Promise<boolean> {
         const { count } = await prisma.room.updateMany({
             where: { id, status: 'waiting', guestId: null },
-            data: { guestId, guestReady: false, status: 'selecting' },
+            data: { guestId, draftId: null, status: 'selecting' },
+        });
+
+        return count === 1;
+    }
+
+    async setDraft(id: string, guestId: string, draftId: string): Promise<boolean> {
+        const { count } = await prisma.room.updateMany({
+            where: { id, guestId, status: 'selecting', draftId: null },
+            data: { draftId },
         });
 
         return count === 1;
@@ -88,47 +93,13 @@ export class RoomRepository implements RoomStore {
     async removeGuest(id: string, guestId: string): Promise<void> {
         await prisma.room.updateMany({
             where: { id, guestId, status: 'selecting' },
-            data: { guestId: null, guestReady: false, status: 'waiting' },
-        });
-    }
-
-    async setReady(id: string, role: RoomRole, team: string[]): Promise<boolean> {
-        const { count } = await prisma.room.updateMany({
-            where: { id, status: { in: OPEN_STATUSES } },
-            data: role === 'host' ? { hostTeam: team, hostReady: true } : { guestTeam: team, guestReady: true },
-        });
-
-        return count === 1;
-    }
-
-    async clearReady(id: string, role: RoomRole): Promise<boolean> {
-        const { count } = await prisma.room.updateMany({
-            where: { id, status: { in: OPEN_STATUSES } },
-            data: role === 'host' ? { hostReady: false } : { guestReady: false },
-        });
-
-        return count === 1;
-    }
-
-    async claimStart(id: string): Promise<boolean> {
-        const { count } = await prisma.room.updateMany({
-            where: { id, status: 'selecting', hostReady: true, guestReady: true },
-            data: { status: 'starting' },
-        });
-
-        return count === 1;
-    }
-
-    async releaseStart(id: string): Promise<void> {
-        await prisma.room.updateMany({
-            where: { id, status: 'starting' },
-            data: { status: 'selecting', hostReady: false, guestReady: false },
+            data: { guestId: null, draftId: null, status: 'waiting' },
         });
     }
 
     async setStarted(id: string, battleId: string): Promise<void> {
         await prisma.room.updateMany({
-            where: { id, status: 'starting' },
+            where: { id, status: { in: ['selecting', 'starting'] } },
             data: { status: 'started', battleId },
         });
     }

@@ -1,7 +1,9 @@
+import type { DraftView } from '../ranked/ranked.types';
+
 /**
  * waiting   — só o anfitrião está na sala, esperando alguém entrar.
- * selecting — os dois estão na sala, escolhendo os times.
- * starting  — os dois avisaram que estão prontos; a batalha está sendo criada.
+ * selecting — os dois estão na sala, banindo e escolhendo os personagens (a seleção, como na ranqueada).
+ * starting  — (salas antigas, de antes da seleção) a batalha estava sendo criada.
  * started   — a batalha existe (`battleId`).
  * closed    — o anfitrião saiu antes de a batalha começar.
  */
@@ -20,11 +22,8 @@ export interface RoomRecord {
     hostName: string;
     guestId: string | null;
     guestName: string | null;
-    /** O time que cada um confirmou. Só vale enquanto o "pronto" correspondente for verdadeiro. */
-    hostTeam: string[] | null;
-    guestTeam: string[] | null;
-    hostReady: boolean;
-    guestReady: boolean;
+    /** A seleção de personagens dos dois. Nasce quando o convidado entra; some se ele sair. */
+    draftId: string | null;
     battleId: string | null;
     createdAt: Date;
     updatedAt: Date;
@@ -46,33 +45,25 @@ export interface RoomStore {
     closeOpenByHost(hostId: string): Promise<void>;
     /** O convidado entra, só se a sala estiver esperando e vazia. Devolve se entrou. */
     join(id: string, guestId: string): Promise<boolean>;
-    /** O convidado sai e a sala volta a esperar, só se a batalha ainda não começou. */
+    /** Liga a seleção à sala, só se este convidado ainda estiver nela e ela ainda não tiver seleção. Devolve se gravou. */
+    setDraft(id: string, guestId: string, draftId: string): Promise<boolean>;
+    /** O convidado sai e a sala volta a esperar (sem a seleção dele), só se a batalha ainda não começou. */
     removeGuest(id: string, guestId: string): Promise<void>;
-    /** Guarda o time e marca o jogador como pronto, só se a batalha ainda não começou. Devolve se gravou. */
-    setReady(id: string, role: RoomRole, team: string[]): Promise<boolean>;
-    /** Desmarca o pronto, só se a batalha ainda não começou. Devolve se gravou. */
-    clearReady(id: string, role: RoomRole): Promise<boolean>;
-    /** Passa a sala para "starting", só se os dois estiverem prontos. Só uma requisição consegue. */
-    claimStart(id: string): Promise<boolean>;
-    /** Desfaz o claimStart quando a criação da batalha falha: a sala volta a "selecting". */
-    releaseStart(id: string): Promise<void>;
+    /** A seleção acabou e a batalha existe. */
     setStarted(id: string, battleId: string): Promise<void>;
     /** Fecha a sala, só se a batalha ainda não começou. */
     close(id: string): Promise<void>;
 }
 
-/** A sala como um dos dois jogadores a enxerga. O time do outro nunca aparece aqui. */
+/** A sala como um dos dois jogadores a enxerga. */
 export interface RoomView {
     code: string;
     status: RoomStatus;
     role: RoomRole;
-    you: {
-        ready: boolean;
-        /** O time confirmado, enquanto estiver pronto. */
-        team: string[] | null;
-    };
-    /** Do outro jogador só se sabe o nome e se ele já está pronto. `null` enquanto ninguém entrou. */
-    opponent: { name: string; ready: boolean } | null;
+    /** Do outro jogador, o nome. `null` enquanto ninguém entrou. */
+    opponent: { name: string } | null;
+    /** A seleção de personagens, enquanto ela acontece (status "selecting"). */
+    draft: DraftView | null;
     /** Preenchido quando a batalha começa: é para lá que a tela vai. */
     battleId: string | null;
     createdAt: Date;

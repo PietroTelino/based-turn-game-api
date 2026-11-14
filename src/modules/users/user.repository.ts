@@ -5,7 +5,7 @@ import type { User } from '../../generated/prisma/client';
 // (pontos e placar), que têm rota própria em src/modules/ranked, e sem o tutorial feito (rota
 // própria em src/modules/tutorial). Numa conta removida, `email` já vem com o e-mail que ela
 // tinha (veja softDelete).
-export type SafeUser = Omit<User, 'password' | 'preferences' | 'rating' | 'rankedWins' | 'rankedLosses' | 'deletedEmail' | 'tutorialCompletedAt'>;
+export type SafeUser = Omit<User, 'password' | 'preferences' | 'rating' | 'rankedWins' | 'rankedLosses' | 'deletedEmail' | 'tutorialCompletedAt' | 'gold' | 'diamonds'>;
 
 /** O que a coluna `email` de uma conta removida passa a ter: não é um e-mail, então nunca colide com um. */
 function deletedMark(id: string): string {

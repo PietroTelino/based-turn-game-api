@@ -8,7 +8,8 @@ export type BattleErrorCode =
     | 'REPLAY_UNAVAILABLE'
     | 'INVALID_DIFFICULTY'
     | 'UNKNOWN_STAGE'
-    | 'STAGE_LOCKED';
+    | 'STAGE_LOCKED'
+    | 'CHARACTER_LOCKED';
 
 /**
  * Erros do módulo de batalhas que não são regra do jogo (esses são GameRuleError).

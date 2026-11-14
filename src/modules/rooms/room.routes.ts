@@ -21,8 +21,7 @@ export function createRoomsRouter(service: RoomService, guard?: RequestHandler):
     roomsRouter.post('/', ...guarded, controller.create);
     roomsRouter.get('/:code', controller.getByCode);
     roomsRouter.post('/:code/join', ...guarded, controller.join);
-    roomsRouter.post('/:code/ready', controller.ready);
-    roomsRouter.post('/:code/unready', controller.unready);
+    roomsRouter.post('/:code/draft', controller.draftAction);
     roomsRouter.post('/:code/leave', controller.leave);
 
     return roomsRouter;

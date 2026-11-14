@@ -1,11 +1,7 @@
 import { Request, Response } from 'express';
-import { BattleError } from '../battles/battle.errors';
+import { RankedError } from '../ranked/ranked.errors';
 import { RoomError } from './room.errors';
 import type { RoomService } from './room.service';
-
-function isStringArray(value: unknown): value is string[] {
-    return Array.isArray(value) && value.every((item) => typeof item === 'string');
-}
 
 export class RoomController {
     constructor(private service: RoomService) {}
@@ -62,33 +58,20 @@ export class RoomController {
         }
     };
 
-    /** POST /:code/ready { team } — confirma o time e avisa que está pronto. */
-    ready = async (req: Request, res: Response) => {
+    /** POST /:code/draft { characterId } — bane ou escolhe no passo da vez da seleção. */
+    draftAction = async (req: Request, res: Response) => {
         try {
             if (!req.user) {
                 return res.status(401).json({ message: req.t('auth.notAuthenticated') });
             }
 
-            const { team } = req.body ?? {};
+            const { characterId } = req.body ?? {};
 
-            if (!isStringArray(team)) {
-                throw new RoomError('INVALID_ROOM_REQUEST', 400, 'battle.teamRequired');
+            if (typeof characterId !== 'string') {
+                throw new RoomError('INVALID_ROOM_REQUEST', 400, 'ranked.draft.characterRequired');
             }
 
-            return res.json(await this.service.ready(req.user.id, String(req.params.code), team));
-        } catch (error) {
-            return this.handleError(req, res, error);
-        }
-    };
-
-    /** POST /:code/unready — volta atrás para trocar o time. */
-    unready = async (req: Request, res: Response) => {
-        try {
-            if (!req.user) {
-                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
-            }
-
-            return res.json(await this.service.unready(req.user.id, String(req.params.code)));
+            return res.json(await this.service.draftAction(req.user.id, String(req.params.code), characterId));
         } catch (error) {
             return this.handleError(req, res, error);
         }
@@ -114,9 +97,9 @@ export class RoomController {
             return res.status(error.status).json({ code: error.code, message: req.t(error.messageKey) });
         }
 
-        // Time inválido: quem confere é o módulo de batalhas.
-        if (error instanceof BattleError) {
-            return res.status(error.status).json({ code: error.code, message: req.t(error.messageKey, error.params) });
+        // Escolha que não vale ou fora da vez: quem confere é a seleção (módulo da ranqueada).
+        if (error instanceof RankedError) {
+            return res.status(error.status).json({ code: error.code, message: req.t(error.messageKey) });
         }
 
         console.error(error);

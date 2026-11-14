@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { RoomRecord, RoomRole, RoomStore } from '../room.types';
+import type { RoomRecord, RoomStore } from '../room.types';
 
 /**
  * Faz o papel do banco nos testes: guarda as salas num Map. `names` faz o
@@ -40,10 +40,7 @@ export class InMemoryRoomStore implements RoomStore {
             hostName: this.nameOf(hostId),
             guestId: null,
             guestName: null,
-            hostTeam: null,
-            guestTeam: null,
-            hostReady: false,
-            guestReady: false,
+            draftId: null,
             battleId: null,
             createdAt: now,
             updatedAt: now,
@@ -80,46 +77,26 @@ export class InMemoryRoomStore implements RoomStore {
         return this.update(id, (room) => room.status === 'waiting' && room.guestId === null, {
             guestId,
             guestName: this.nameOf(guestId),
-            guestReady: false,
+            draftId: null,
             status: 'selecting',
         });
+    }
+
+    async setDraft(id: string, guestId: string, draftId: string): Promise<boolean> {
+        return this.update(id, (room) => room.status === 'selecting' && room.guestId === guestId && room.draftId === null, { draftId });
     }
 
     async removeGuest(id: string, guestId: string): Promise<void> {
         this.update(id, (room) => room.status === 'selecting' && room.guestId === guestId, {
             guestId: null,
             guestName: null,
-            guestReady: false,
+            draftId: null,
             status: 'waiting',
         });
     }
 
-    async setReady(id: string, role: RoomRole, team: string[]): Promise<boolean> {
-        return this.update(
-            id,
-            (room) => room.status === 'waiting' || room.status === 'selecting',
-            role === 'host' ? { hostTeam: [...team], hostReady: true } : { guestTeam: [...team], guestReady: true },
-        );
-    }
-
-    async clearReady(id: string, role: RoomRole): Promise<boolean> {
-        return this.update(
-            id,
-            (room) => room.status === 'waiting' || room.status === 'selecting',
-            role === 'host' ? { hostReady: false } : { guestReady: false },
-        );
-    }
-
-    async claimStart(id: string): Promise<boolean> {
-        return this.update(id, (room) => room.status === 'selecting' && room.hostReady && room.guestReady, { status: 'starting' });
-    }
-
-    async releaseStart(id: string): Promise<void> {
-        this.update(id, (room) => room.status === 'starting', { status: 'selecting', hostReady: false, guestReady: false });
-    }
-
     async setStarted(id: string, battleId: string): Promise<void> {
-        this.update(id, (room) => room.status === 'starting', { status: 'started', battleId });
+        this.update(id, (room) => room.status === 'selecting' || room.status === 'starting', { status: 'started', battleId });
     }
 
     async close(id: string): Promise<void> {

@@ -41,6 +41,8 @@ export interface RankedDraft {
     /** Quem fica com o time A e começa banindo e escolhendo. */
     hostId: string;
     guestId: string;
+    /** Se a partida que sai da seleção vale pontos. A seleção das salas (partida casual) não vale. */
+    ranked: boolean;
     /** O que já foi feito, na ordem de DRAFT_ORDER. */
     actions: DraftAction[];
     status: DraftStatus;
@@ -121,8 +123,8 @@ export interface RankedStore {
     release(ticketId: string): Promise<void>;
     /** Os bilhetes reservados passam a apontar para a seleção de personagens criada para eles. */
     setMatched(ticketIds: string[], draftId: string): Promise<void>;
-    /** Cria a seleção de personagens de dois jogadores pareados. `hostId` é o time A, que começa. */
-    createDraft(hostId: string, guestId: string, now: Date): Promise<RankedDraft>;
+    /** Cria a seleção de personagens de dois jogadores. `hostId` é o time A, que começa. `ranked: false` nas salas. */
+    createDraft(hostId: string, guestId: string, now: Date, ranked?: boolean): Promise<RankedDraft>;
     findDraft(id: string): Promise<RankedDraft | null>;
     /**
      * Grava a seleção só se ela ainda estiver na versão esperada (a trava contra

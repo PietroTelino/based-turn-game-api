@@ -33,6 +33,11 @@ model User {
     rankedWins      Int             @default(0) @map("ranked_wins")
     rankedLosses    Int             @default(0) @map("ranked_losses")
 
+    // Recursos: o ouro se ganha jogando; os diamantes são o recurso pago (por enquanto, só
+    // conquistas raras e o administrador dão diamantes).
+    gold            Int             @default(0)
+    diamonds        Int             @default(0)
+
     passwordResets  PasswordReset[] 
     refreshTokens   RefreshToken[]
     auditLogs       AuditLog[]      @relation("UserAudits")
@@ -43,6 +48,9 @@ model User {
     joinedRooms     Room[]          @relation("RoomGuest")
     battlePicks     BattlePick[]
     rankedTicket    RankedTicket?
+    characters      UserCharacter[]
+    achievements    UserAchievement[]
+    battleRewards   BattleReward[]
 
     @@map("users")
 }
@@ -217,7 +225,9 @@ model Room {
     hostReady   Boolean   @default(false) @map("host_ready")
     guestReady  Boolean   @default(false) @map("guest_ready")
 
-    // A batalha criada quando os dois ficaram prontos.
+    // A seleção de personagens dos dois (ranked_drafts, com ranked = false). Nasce quando o convidado entra.
+    draftId     String?   @map("draft_id") @db.Uuid
+    // A batalha criada quando a seleção acaba.
     battleId    String?   @map("battle_id") @db.Uuid
 
     createdAt   DateTime  @default(now()) @map("created_at")
@@ -234,6 +244,8 @@ model RankedDraft {
     // Quem fica com o time A e começa; o outro fica com o B.
     hostId        String   @map("host_id") @db.Uuid
     guestId       String   @map("guest_id") @db.Uuid
+    // false na seleção das salas (partida casual): a partida que sai dela não vale pontos.
+    ranked        Boolean  @default(true)
     // O que já foi feito, em ordem: [{ team, kind: "ban" | "pick", characterId, auto }].
     actions       Json     @default("[]")
     // "drafting" | "starting" | "done"
@@ -248,4 +260,46 @@ model RankedDraft {
     updatedAt     DateTime @updatedAt      @map("updated_at")
 
     @@map("ranked_drafts")
+}
+
+// Um personagem que o jogador desbloqueou (os iniciais não têm linha: valem para todos).
+// `source`: "achievement" | "gold" | "diamonds" | "admin".
+model UserCharacter {
+    id          String   @id @default(uuid()) @db.Uuid
+    userId      String   @map("user_id") @db.Uuid
+    user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    characterId String   @map("character_id")
+    source      String
+    createdAt   DateTime @default(now()) @map("created_at")
+
+    @@unique([userId, characterId])
+    @@map("user_characters")
+}
+
+// Uma conquista que o jogador completou (a recompensa foi entregue junto). As conquistas
+// em si ficam no código (src/modules/progression/progression.catalog.ts).
+model UserAchievement {
+    id            String   @id @default(uuid()) @db.Uuid
+    userId        String   @map("user_id") @db.Uuid
+    user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    achievementId String   @map("achievement_id")
+    completedAt   DateTime @default(now()) @map("completed_at")
+
+    @@unique([userId, achievementId])
+    @@map("user_achievements")
+}
+
+// O que um jogador ganhou ao fim de uma batalha (ouro e conquistas completadas nela).
+// Uma linha por jogador e batalha: é ela que impede pagar duas vezes.
+model BattleReward {
+    id           String   @id @default(uuid()) @db.Uuid
+    battleId     String   @map("battle_id") @db.Uuid
+    userId       String   @map("user_id") @db.Uuid
+    user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    gold         Int
+    achievements Json     @default("[]")
+    createdAt    DateTime @default(now()) @map("created_at")
+
+    @@unique([battleId, userId])
+    @@map("battle_rewards")
 }

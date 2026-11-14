@@ -136,6 +136,25 @@ export class BattleService {
         this.finishedListeners.push(listener);
     }
 
+    private lockedOf: ((userId: string, team: string[]) => Promise<string | null>) | null = null;
+
+    /**
+     * Quem diz se o jogador já tem os personagens (src/modules/progression).
+     * Sem isto (nos testes), todos os personagens valem para todos.
+     */
+    setAccessCheck(lockedOf: (userId: string, team: string[]) => Promise<string | null>): void {
+        this.lockedOf = lockedOf;
+    }
+
+    /** Lança CHARACTER_LOCKED se o jogador ainda não desbloqueou algum personagem do time. */
+    async assertOwned(userId: string, team: string[]): Promise<void> {
+        const locked = this.lockedOf ? await this.lockedOf(userId, team) : null;
+
+        if (locked) {
+            throw new BattleError('CHARACTER_LOCKED', 403, 'battle.characterLocked', { id: locked });
+        }
+    }
+
     listCharacters(): CharacterDefinition[] {
         return CHARACTERS;
     }
@@ -171,6 +190,12 @@ export class BattleService {
 
     async create(userId: string, input: CreateBattleInput): Promise<BattleResponse> {
         const teamA = this.resolveTeam(input.team);
+
+        // O treino tem o time dele, que o jogador não escolhe.
+        if (!input.training) {
+            await this.assertOwned(userId, input.team);
+        }
+
         const stage = input.campaignStage !== undefined ? await this.openStage(userId, input.campaignStage) : undefined;
         // A fase tem o time dela. Nos testes de 1 contra 1, entram só os primeiros.
         const teamB = stage

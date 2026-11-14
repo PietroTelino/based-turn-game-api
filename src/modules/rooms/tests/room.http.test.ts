@@ -11,6 +11,9 @@ import { i18next, middleware } from '../../../config/i18n';
 import { createBattlesRouter } from '../../battles/battle.routes';
 import { BattleService } from '../../battles/battle.service';
 import { InMemoryBattleStore } from '../../battles/tests/in-memory-store';
+import { DRAFT_ORDER } from '../../ranked/ranked.draft';
+import { RankedService } from '../../ranked/ranked.service';
+import { InMemoryRankedStore } from '../../ranked/tests/in-memory-ranked-store';
 import { createRoomsRouter } from '../room.routes';
 import { RoomService } from '../room.service';
 import { InMemoryRoomStore } from './in-memory-room-store';
@@ -56,8 +59,10 @@ describe('rotas /api/rooms', () => {
             await new Promise<void>((resolve) => i18next.on('initialized', () => resolve()));
         }
 
-        const battles = new BattleService(new InMemoryBattleStore(), () => 0);
-        const rooms = new RoomService(new InMemoryRoomStore({ [ANA_ID]: 'Ana', [BRUNO_ID]: 'Bruno', [CAIO_ID]: 'Caio' }), battles);
+        const battleStore = new InMemoryBattleStore();
+        const battles = new BattleService(battleStore, () => 0);
+        const ranked = new RankedService(new InMemoryRankedStore(battleStore, [ANA_ID, BRUNO_ID, CAIO_ID]), battles);
+        const rooms = new RoomService(new InMemoryRoomStore({ [ANA_ID]: 'Ana', [BRUNO_ID]: 'Bruno', [CAIO_ID]: 'Caio' }), ranked);
         const app = express();
 
         app.use(middleware.handle(i18next));
@@ -80,7 +85,7 @@ describe('rotas /api/rooms', () => {
         assert.equal((await call('POST', '/rooms')).status, 401);
     });
 
-    it('fluxo completo: criar, entrar, ficar pronto dos dois lados e jogar a batalha', async () => {
+    it('fluxo completo: criar, entrar, banir e escolher dos dois lados e jogar a batalha', async () => {
         const created = await call('POST', '/rooms', { token: ana });
 
         assert.equal(created.status, 201);
@@ -98,17 +103,24 @@ describe('rotas /api/rooms', () => {
         assert.equal(joined.status, 200);
         assert.deepEqual([joined.body.role, joined.body.status, joined.body.opponent.name], ['guest', 'selecting', 'Ana']);
 
-        const anaReady = await call('POST', `/rooms/${code}/ready`, { token: ana, body: { team: ANA_TEAM } });
-        const seenByBruno = await call('GET', `/rooms/${code}`, { token: bruno });
+        assert.deepEqual([joined.body.draft.you, joined.body.draft.current.team, joined.body.draft.current.kind], ['B', 'A', 'ban']);
 
-        assert.deepEqual(anaReady.body.you, { ready: true, team: ANA_TEAM });
-        assert.deepEqual(seenByBruno.body.opponent, { name: 'Ana', ready: true });
-        assert.ok(!ANA_TEAM.some((id) => JSON.stringify(seenByBruno.body).includes(id)), 'o time da Ana não vaza para o Bruno');
+        // A seleção, como na ranqueada: a Ana bane o Necromante, o Bruno o Druida, e cada um escolhe o seu time.
+        const bans = { A: 'necromante', B: 'druida' } as const;
+        const teams = { A: ANA_TEAM, B: BRUNO_TEAM };
+        const used = { A: 0, B: 0 };
+        let last: any = null;
 
-        const brunoReady = await call('POST', `/rooms/${code}/ready`, { token: bruno, body: { team: BRUNO_TEAM } });
-        const battleId: string = brunoReady.body.battleId;
+        for (const step of DRAFT_ORDER) {
+            const characterId = step.kind === 'ban' ? bans[step.team] : teams[step.team][used[step.team]++];
 
-        assert.equal(brunoReady.body.status, 'started');
+            last = await call('POST', `/rooms/${code}/draft`, { token: step.team === 'A' ? ana : bruno, body: { characterId } });
+            assert.equal(last.status, 200);
+        }
+
+        const battleId: string = last.body.battleId;
+
+        assert.equal(last.body.status, 'started');
         assert.equal((await call('GET', `/rooms/${code}`, { token: ana })).body.battleId, battleId);
 
         // A batalha é a mesma para os dois, cada um do seu lado.
@@ -154,15 +166,17 @@ describe('rotas /api/rooms', () => {
         await call('POST', `/rooms/${room.code}/join`, { token: bruno });
 
         const full = await call('POST', `/rooms/${room.code}/join`, { token: caio });
-        const noTeam = await call('POST', `/rooms/${room.code}/ready`, { token: ana, body: {} });
-        const shortTeam = await call('POST', `/rooms/${room.code}/ready`, { token: ana, body: { team: ['barbaro'] } });
+        const noCharacter = await call('POST', `/rooms/${room.code}/draft`, { token: ana, body: {} });
+        const notYourTurn = await call('POST', `/rooms/${room.code}/draft`, { token: bruno, body: { characterId: 'barbaro' } });
+        const unknown = await call('POST', `/rooms/${room.code}/draft`, { token: ana, body: { characterId: 'dragao' } });
 
         assert.deepEqual([missing.status, missing.body], [404, { code: 'ROOM_NOT_FOUND', message: 'Sala não encontrada' }]);
         assert.deepEqual([outsider.status, outsider.body.code], [404, 'ROOM_NOT_FOUND']);
         assert.deepEqual([full.status, full.body], [409, { code: 'ROOM_FULL', message: 'Essa sala já está cheia' }]);
-        assert.deepEqual([noTeam.status, noTeam.body.code], [400, 'INVALID_ROOM_REQUEST']);
-        assert.deepEqual([shortTeam.status, shortTeam.body.code], [400, 'INVALID_TEAM']);
-        assert.match(shortTeam.body.message, /exatamente 5 /);
+        assert.deepEqual([noCharacter.status, noCharacter.body.code], [400, 'INVALID_ROOM_REQUEST']);
+        assert.deepEqual([notYourTurn.status, notYourTurn.body.code], [409, 'NOT_YOUR_DRAFT_TURN']);
+        assert.deepEqual([unknown.status, unknown.body.code], [400, 'INVALID_DRAFT_CHOICE']);
+        assert.ok(unknown.body.message);
     });
 
     it('sair: o convidado libera a vaga, o anfitrião fecha a sala', async () => {
@@ -179,7 +193,7 @@ describe('rotas /api/rooms', () => {
         await call('POST', `/rooms/${room.code}/leave`, { token: ana });
 
         const closed = await call('GET', `/rooms/${room.code}`, { token: caio });
-        const late = await call('POST', `/rooms/${room.code}/ready`, { token: caio, body: { team: BRUNO_TEAM } });
+        const late = await call('POST', `/rooms/${room.code}/draft`, { token: caio, body: { characterId: 'barbaro' } });
 
         assert.equal(closed.body.status, 'closed');
         assert.deepEqual([late.status, late.body], [409, { code: 'ROOM_CLOSED', message: 'Essa sala não está mais aberta' }]);

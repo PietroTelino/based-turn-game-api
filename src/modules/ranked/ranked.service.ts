@@ -157,15 +157,40 @@ export class RankedService {
      * tempo esgotado e, no fim, cria a partida.
      */
     async draft(userId: string): Promise<DraftView> {
-        const draft = await this.settleDraft(await this.findMyDraft(userId));
-
-        return this.toDraftView(draft, userId);
+        return this.showDraft(userId, await this.findMyDraft(userId));
     }
 
     /** Bane ou escolhe `characterId` no passo da vez, que precisa ser de quem pediu. */
     async draftAction(userId: string, characterId: string): Promise<DraftView> {
+        return this.act(userId, await this.findMyDraft(userId), characterId);
+    }
+
+    /**
+     * Começa uma seleção fora da fila: a das salas. É a mesma seleção da
+     * ranqueada (banimentos, escolhas, prazo), mas a partida que sai dela não
+     * vale pontos. Devolve o id, que a sala guarda.
+     */
+    async startCasualDraft(hostId: string, guestId: string): Promise<string> {
+        return (await this.store.createDraft(hostId, guestId, this.now(), false)).id;
+    }
+
+    /** A seleção `draftId` como `userId` a enxerga (as salas perguntam por aqui). */
+    async draftById(userId: string, draftId: string): Promise<DraftView> {
+        return this.showDraft(userId, await this.memberDraft(userId, draftId));
+    }
+
+    /** Bane ou escolhe na seleção `draftId` (a das salas). */
+    async draftActionById(userId: string, draftId: string, characterId: string): Promise<DraftView> {
+        return this.act(userId, await this.memberDraft(userId, draftId), characterId);
+    }
+
+    private async showDraft(userId: string, found: RankedDraft): Promise<DraftView> {
+        return this.toDraftView(await this.settleDraft(found), userId);
+    }
+
+    private async act(userId: string, found: RankedDraft, characterId: string): Promise<DraftView> {
         // Primeiro o que o relógio já decidiu: o passo pode ter passado por tempo esgotado.
-        const draft = await this.settleDraft(await this.findMyDraft(userId));
+        const draft = await this.settleDraft(found);
         const step = currentStep(draft.actions);
 
         if (draft.status !== 'drafting' || !step || step.team !== this.teamIn(draft, userId)) {
@@ -273,6 +298,17 @@ export class RankedService {
         return draft;
     }
 
+    /** A seleção `draftId`, só se quem pediu está nela. */
+    private async memberDraft(userId: string, draftId: string): Promise<RankedDraft> {
+        const draft = await this.store.findDraft(draftId);
+
+        if (!draft || (draft.hostId !== userId && draft.guestId !== userId)) {
+            throw new RankedError('NOT_IN_DRAFT', 404, 'ranked.draft.notFound');
+        }
+
+        return draft;
+    }
+
     /**
      * Põe a seleção em dia: aplica as escolhas por tempo esgotado (um passo
      * por prazo vencido, mesmo que ninguém tenha perguntado na hora) e, se ela
@@ -339,7 +375,7 @@ export class RankedService {
                 hostTeam: teamOf(current.actions, 'A'),
                 guestId: current.guestId,
                 guestTeam: teamOf(current.actions, 'B'),
-                ranked: true,
+                ranked: current.ranked,
             });
 
             return (await this.store.saveDraft(current.id, current.version, { status: 'done', battleId })) ?? this.reload(current.id);

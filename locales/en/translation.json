@@ -102,12 +102,14 @@
             "TARGET_REQUIRED": "Choose a target",
             "INVALID_TARGET": "Invalid target",
             "SKILL_USED_UP": "This skill was already used in this battle"
-        }
+        },
+        "characterLocked": "You have not unlocked {{id}} yet: complete its achievement or buy it in the shop."
     },
     "room": {
         "notFound": "Room not found",
         "full": "This room is already full",
         "closed": "This room is no longer open",
+        "notDrafting": "The draft starts when the other player joins",
         "errorUnexpected": "Error while processing the room"
     },
     "ranked": {
@@ -127,5 +129,17 @@
     },
     "stats": {
         "errorUnexpected": "Error loading the statistics"
+    },
+    "progression": {
+        "characterLocked": "You have not unlocked {{id}} yet: complete its achievement or buy it in the shop.",
+        "unknownCharacter": "Unknown character: {{id}}",
+        "notForSale": "This character is not for sale.",
+        "alreadyOwned": "You already own this character.",
+        "insufficient": {
+            "gold": "Not enough gold.",
+            "diamonds": "Not enough diamonds."
+        },
+        "invalidAmount": "Invalid amount.",
+        "errorUnexpected": "Unexpected progression error."
     }
 }

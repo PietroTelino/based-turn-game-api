@@ -8,3 +8,4 @@ import './modules/rooms/tests';
 import './modules/ranked/tests';
 import './modules/stats/tests';
 import './modules/tutorial/tests';
+import './modules/progression/tests';

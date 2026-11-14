@@ -22,6 +22,7 @@ function toDraft(row: DraftRow): RankedDraft {
         id: row.id,
         hostId: row.hostId,
         guestId: row.guestId,
+        ranked: row.ranked,
         // A coluna é Json: o Prisma devolve a lista como foi gravada.
         actions: row.actions as unknown as DraftAction[],
         status: row.status as DraftStatus,
@@ -104,8 +105,8 @@ export class RankedRepository implements RankedStore {
         });
     }
 
-    async createDraft(hostId: string, guestId: string, now: Date): Promise<RankedDraft> {
-        const row = await prisma.rankedDraft.create({ data: { hostId, guestId, actions: [], turnStartedAt: now } });
+    async createDraft(hostId: string, guestId: string, now: Date, ranked = true): Promise<RankedDraft> {
+        const row = await prisma.rankedDraft.create({ data: { hostId, guestId, ranked, actions: [], turnStartedAt: now } });
 
         return toDraft(row);
     }
