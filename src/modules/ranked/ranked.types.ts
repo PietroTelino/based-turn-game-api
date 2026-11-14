@@ -1,6 +1,7 @@
 import type { TeamId } from '../../game';
 import type { DraftAction, DraftKind, DraftStep } from './ranked.draft';
 import type { RankId } from './ranked.rules';
+import type { SeasonResult } from './ranked.season';
 
 /**
  * searching — na fila, esperando um adversário.
@@ -84,6 +85,8 @@ export interface RankedStanding {
     rating: number;
     wins: number;
     losses: number;
+    /** A temporada a que os pontos e o placar pertencem. `null` em quem nunca passou por uma virada. */
+    season: string | null;
 }
 
 /** O resultado de uma partida ranqueada, pronto para ser lançado. */
@@ -143,6 +146,18 @@ export interface RankedStore {
      * partida. Só lança uma vez por batalha: se já foi lançado, devolve null.
      */
     settle(result: RankedResult, change: (winnerPoints: number, loserPoints: number) => { gain: number; loss: number }): Promise<RankedSettlement | null>;
+    /**
+     * Vira a temporada do jogador, só se ela ainda for `from`: grava `next`
+     * (pontos e placar da temporada nova) e, com `result`, guarda como ele
+     * terminou a anterior e paga a recompensa. Tudo junto. Devolve se virou.
+     */
+    rollSeason(userId: string, from: string | null, to: string, next: { rating: number; wins: number; losses: number }, result: SeasonResult | null): Promise<boolean>;
+    /** Como o jogador terminou a última temporada em que jogou. */
+    lastSeasonResult(userId: string): Promise<SeasonResult | null>;
+    /** Quem jogou na temporada, dos mais pontos para os menos. */
+    leaderboard(season: string, limit: number): Promise<{ userId: string; name: string; rating: number; wins: number; losses: number }[]>;
+    /** Quantos jogadores da temporada têm mais pontos que `rating`. */
+    countAbove(season: string, rating: number): Promise<number>;
 }
 
 /** Como o jogador está na fila agora. */
@@ -171,4 +186,8 @@ export interface RankedProfile {
     wins: number;
     losses: number;
     queue: QueueView;
+    /** A temporada atual e quando ela acaba. */
+    season: { id: string; endsAt: Date };
+    /** Como o jogador terminou a última temporada em que jogou (e o que ganhou). */
+    lastSeason: SeasonResult | null;
 }

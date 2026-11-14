@@ -22,6 +22,9 @@ import { TutorialService } from '../modules/tutorial/tutorial.service';
 import { createProgressionRouter } from '../modules/progression/progression.routes';
 import { ProgressionRepository } from '../modules/progression/progression.repository';
 import { ProgressionService } from '../modules/progression/progression.service';
+import { createFriendsRouter } from '../modules/friends/friends.routes';
+import { FriendsRepository } from '../modules/friends/friends.repository';
+import { FriendsService } from '../modules/friends/friends.service';
 import { prisma } from '../prisma';
 
 export const router = Router();
@@ -53,10 +56,17 @@ battleService.onFinished((battle) => tutorialService.onBattleFinished(battle));
 
 // Progressão: o ouro de cada batalha e as conquistas; e só joga com quem desbloqueou
 // (na ranqueada a seleção é com todos os personagens, para ninguém ficar sem time).
-const progressionService = new ProgressionService(new ProgressionRepository(), () => battleService.listCharacters().map((c) => c.id));
+const progressionService = new ProgressionService(new ProgressionRepository(), () => battleService.listCharacters().map((c) => c.id), {
+    roleOf: (id) => battleService.listCharacters().find((c) => c.id === id)?.role,
+});
 
 battleService.onFinished((battle) => progressionService.onBattleFinished(battle));
 battleService.setAccessCheck((userId, team) => progressionService.lockedOf(userId, team));
+
+// Amigos: convites para a sala e assistir às partidas uns dos outros.
+const friendsService = new FriendsService(new FriendsRepository());
+
+battleService.setViewerCheck((viewerId, playerIds) => friendsService.canWatch(viewerId, playerIds));
 
 // O tutorial é obrigatório: sem ele, não dá para começar nenhuma partida além da de treino.
 const tutorialGuard = tutorialService.guard();
@@ -67,3 +77,4 @@ router.use('/rooms', createRoomsRouter(new RoomService(new RoomRepository(), ran
 router.use('/ranked', createRankedRouter(rankedService, tutorialGuard));
 router.use('/stats', createStatsRouter(new StatsService(new StatsRepository())));
 router.use('/progression', createProgressionRouter(progressionService));
+router.use('/friends', createFriendsRouter(friendsService));

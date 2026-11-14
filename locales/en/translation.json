@@ -91,6 +91,8 @@
         "invalidDifficulty": "Invalid difficulty: use easy, normal or hard",
         "unknownStage": "Unknown campaign stage: {{stage}}",
         "stageLocked": "This stage is still locked: beat the previous stage first",
+        "unknownFloor": "Unknown tower floor: {{floor}}",
+        "towerLocked": "This tower floor isn't open yet: beat the previous one first",
         "errorUnexpected": "Error while processing the battle",
         "rules": {
             "INVALID_SETUP": "Invalid battle setup",
@@ -104,6 +106,17 @@
             "SKILL_USED_UP": "This skill was already used in this battle"
         },
         "characterLocked": "You have not unlocked {{id}} yet: complete its achievement or buy it in the shop."
+    },
+    "friends": {
+        "self": "You can't add yourself.",
+        "userNotFound": "Player not found.",
+        "already": "You're already friends.",
+        "alreadyRequested": "The request was already sent.",
+        "requestNotFound": "Friend request not found.",
+        "notFriends": "You can only invite friends.",
+        "roomNotFound": "Room not found.",
+        "roomNotWaiting": "The room is no longer waiting for players.",
+        "errorUnexpected": "Error while processing friends"
     },
     "room": {
         "notFound": "Room not found",
@@ -135,6 +148,9 @@
         "unknownCharacter": "Unknown character: {{id}}",
         "notForSale": "This character is not for sale.",
         "alreadyOwned": "You already own this character.",
+        "unknownReward": "Unknown reward.",
+        "notCompleted": "You haven't reached this reward yet.",
+        "alreadyClaimed": "This reward was already claimed.",
         "insufficient": {
             "gold": "Not enough gold.",
             "diamonds": "Not enough diamonds."

@@ -399,6 +399,8 @@ export interface CharacterDefinition {
      * que é o que a tela usa para achar a ilustração.
      */
     summons?: FormDefinition[];
+    /** Chefe da campanha: um personagem reforçado, com uma habilidade só dele (data/bosses.ts). */
+    boss?: boolean;
 }
 
 /** Um personagem dentro de uma batalha específica. */
@@ -432,6 +434,8 @@ export interface BattleUnit {
     summons?: FormDefinition[];
     /** A unidade foi invocada (um esqueleto erguido). Quando cai, não deixa cadáver. */
     summoned?: boolean;
+    /** A unidade é um chefe (a tela a mostra maior e com a marca de chefe). */
+    boss?: boolean;
     /** Quantas vezes a unidade já usou cada habilidade que tem limite de usos (SkillDefinition.uses), pelo id. */
     skillUses?: Record<string, number>;
     /**
@@ -511,6 +515,9 @@ export interface BattleState {
     difficulty?: AiDifficulty;
     /** Batalha da campanha: a fase (1, 2...). O motor não usa: é para a tela e para o progresso do jogador. */
     campaignStage?: number;
+    /** Batalha da torre: o andar (1, 2...) e os modificadores dele (data/tower.ts). O motor não usa. */
+    towerFloor?: number;
+    towerModifiers?: string[];
     /** Estado do gerador de números aleatórios (ver rng.ts). */
     rngState: number;
 }

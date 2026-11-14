@@ -39,6 +39,8 @@ export interface NewBattle {
     difficulty?: AiDifficulty;
     /** Batalha da campanha: a fase. */
     campaignStage?: number;
+    /** Batalha da torre: o andar. */
+    towerFloor?: number;
 }
 
 /** Uma batalha como está guardada no banco. */
@@ -66,6 +68,8 @@ export interface BattleRecord extends BattleSnapshot {
     difficulty: AiDifficulty | null;
     /** Batalha da campanha: a fase. `null` nas outras. */
     campaignStage: number | null;
+    /** Batalha da torre: o andar. Vazio nas outras. */
+    towerFloor: number | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -95,6 +99,8 @@ export interface BattleStore {
     findManyByUser(userId: string, limit: number): Promise<BattleSummaryRow[]>;
     /** As fases da campanha que o jogador já venceu, e em que nível (uma linha por vitória). */
     findCampaignWins(userId: string): Promise<CampaignWin[]>;
+    /** O andar mais alto da torre que o jogador já venceu (0 se nenhum). */
+    findTowerBest(userId: string): Promise<number>;
     /**
      * Grava só se a batalha ainda estiver em andamento e na vez esperada.
      * Devolve null quando outra requisição gravou antes. `events` passa a ser
@@ -119,6 +125,23 @@ export interface CampaignStageView {
     unlocked: boolean;
     /** Os níveis em que o jogador já venceu esta fase, do mais fácil ao mais difícil. */
     clearedOn: AiDifficulty[];
+    /** O chefe da fase, quando ela tem: a posição no time inimigo e o nome. */
+    boss: { slot: number; name: string } | null;
+}
+
+/** A torre como o jogador a vê: até onde chegou e o próximo andar. */
+export interface TowerView {
+    best: number;
+    next: {
+        floor: number;
+        enemyTeam: string[];
+        arena: ArenaId;
+        difficulty: AiDifficulty;
+        modifiers: string[];
+        /** Quanto a vida e o ataque dos inimigos crescem, em porcentagem (0 no andar 1). */
+        scalePercent: number;
+        reward: { gold: number; diamonds: number };
+    };
 }
 
 /**
@@ -154,6 +177,9 @@ export interface BattleView {
     difficulty: AiDifficulty | null;
     /** Batalha da campanha: a fase. */
     campaignStage: number | null;
+    towerFloor: number | null;
+    /** Quem pediu só assiste (é amigo de quem joga): nada para escolher, o lado mostrado é o A. */
+    spectating: boolean;
     /**
      * Partida entre jogadores em andamento: quanto tempo quem está na vez ainda
      * tem para jogar, em ms. Em zero, a jogada é feita ao acaso por ele. `null`

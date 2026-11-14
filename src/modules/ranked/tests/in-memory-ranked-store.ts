@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { InMemoryBattleStore } from '../../battles/tests/in-memory-store';
 import type { DraftChange, RankedDraft, RankedResult, RankedSettlement, RankedStanding, RankedStore, RankedTicket } from '../ranked.types';
+import type { SeasonResult } from '../ranked.season';
 
 /**
  * Faz o papel do banco nos testes: os bilhetes da fila num Map e os pontos de
@@ -18,12 +19,53 @@ export class InMemoryRankedStore implements RankedStore {
         players: string[] = [],
         private now: () => Date = () => new Date(),
     ) {
-        for (const id of players) this.standings.set(id, { rating: 0, wins: 0, losses: 0 });
+        for (const id of players) this.standings.set(id, { rating: 0, wins: 0, losses: 0, season: null });
     }
+
+    /** O que as viradas de temporada pagaram, por jogador. */
+    results: (SeasonResult & { userId: string })[] = [];
 
     /** Só para os testes: define os pontos de um jogador. */
     setRating(userId: string, rating: number): void {
-        this.standings.set(userId, { ...(this.standings.get(userId) ?? { wins: 0, losses: 0 }), rating });
+        this.standings.set(userId, { ...(this.standings.get(userId) ?? { wins: 0, losses: 0, season: null }), rating });
+    }
+
+    /** Só para os testes: muda qualquer parte do placar de um jogador. */
+    setStanding(userId: string, change: Partial<RankedStanding>): void {
+        this.standings.set(userId, { ...(this.standings.get(userId) ?? { rating: 0, wins: 0, losses: 0, season: null }), ...change });
+    }
+
+    async rollSeason(userId: string, from: string | null, to: string, next: { rating: number; wins: number; losses: number }, result: SeasonResult | null): Promise<boolean> {
+        const standing = this.standings.get(userId);
+
+        if (!standing || standing.season !== from) return false;
+
+        this.standings.set(userId, { ...next, season: to });
+        if (result) this.results.push({ ...result, userId });
+
+        return true;
+    }
+
+    async lastSeasonResult(userId: string): Promise<SeasonResult | null> {
+        const mine = this.results.filter((item) => item.userId === userId).sort((a, b) => b.season.localeCompare(a.season))[0];
+
+        if (!mine) return null;
+
+        const { userId: _user, ...result } = mine;
+
+        return result;
+    }
+
+    async leaderboard(season: string, limit: number) {
+        return [...this.standings]
+            .filter(([, s]) => s.season === season && s.wins + s.losses > 0)
+            .sort(([a, x], [b, y]) => y.rating - x.rating || y.wins - x.wins || a.localeCompare(b))
+            .slice(0, limit)
+            .map(([userId, s]) => ({ userId, name: userId, rating: s.rating, wins: s.wins, losses: s.losses }));
+    }
+
+    async countAbove(season: string, rating: number): Promise<number> {
+        return [...this.standings.values()].filter((s) => s.season === season && s.wins + s.losses > 0 && s.rating > rating).length;
     }
 
     private update(id: string, when: (ticket: RankedTicket) => boolean, change: Partial<RankedTicket>): boolean {

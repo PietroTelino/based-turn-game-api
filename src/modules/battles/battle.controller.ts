@@ -50,7 +50,7 @@ export class BattleController {
                 return res.status(401).json({ message: req.t('auth.notAuthenticated') });
             }
 
-            const { team, enemyTeam, training, difficulty, campaignStage } = req.body ?? {};
+            const { team, enemyTeam, training, difficulty, campaignStage, towerFloor } = req.body ?? {};
 
             if (!isStringArray(team) || (enemyTeam !== undefined && !isStringArray(enemyTeam))) {
                 throw new BattleError('INVALID_TEAM', 400, 'battle.teamRequired');
@@ -64,6 +64,10 @@ export class BattleController {
                 throw new BattleError('UNKNOWN_STAGE', 400, 'battle.unknownStage', { stage: String(campaignStage) });
             }
 
+            if (towerFloor !== undefined && !Number.isInteger(towerFloor)) {
+                throw new BattleError('UNKNOWN_FLOOR', 400, 'battle.unknownFloor', { floor: String(towerFloor) });
+            }
+
             const result = await this.service.create(req.user.id, {
                 team,
                 ...(enemyTeam !== undefined && { enemyTeam }),
@@ -71,6 +75,7 @@ export class BattleController {
                 ...(training === true && { training: true }),
                 ...(difficulty !== undefined && { difficulty }),
                 ...(campaignStage !== undefined && { campaignStage: campaignStage as number }),
+                ...(towerFloor !== undefined && { towerFloor: towerFloor as number }),
             });
 
             return res.status(201).json(result);
@@ -128,6 +133,34 @@ export class BattleController {
     };
 
     /** GET /:id/replay — a batalha encerrada do começo ao fim, para assistir de novo. */
+    /** GET /tower — o andar mais alto vencido e o próximo. */
+    tower = async (req: Request, res: Response) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
+            }
+
+            return res.json(await this.service.tower(req.user.id));
+        } catch (error) {
+            return this.handleError(req, res, error);
+        }
+    };
+
+    /** GET /:id/watch?after=N — assistir à batalha de um amigo. */
+    watch = async (req: Request, res: Response) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
+            }
+
+            const after = Number(req.query.after ?? 0);
+
+            return res.json(await this.service.watch(req.user.id, String(req.params.id), Number.isInteger(after) ? after : 0));
+        } catch (error) {
+            return this.handleError(req, res, error);
+        }
+    };
+
     replay = async (req: Request, res: Response) => {
         try {
             if (!req.user) {

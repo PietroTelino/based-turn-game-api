@@ -12,6 +12,8 @@ export interface CampaignStage {
     arena: ArenaId;
     /** Os personagens do time inimigo, na ordem. */
     enemyTeam: string[];
+    /** O chefe da fase: entra no lugar do personagem na posição `slot` do time inimigo (data/bosses.ts). */
+    boss?: { slot: number; id: string };
 }
 
 /**
@@ -60,6 +62,7 @@ export const CAMPAIGN: readonly CampaignStage[] = [
         key: 'nevasca',
         arena: 'lago-gelado',
         enemyTeam: ['criomante', 'necromante', 'banshee', 'vampiro', 'ladino'],
+        boss: { slot: 1, id: 'rei-lich' },
     },
     {
         // O torneio dos duelistas: só lâminas, com o Bardo empurrando o ritmo.
@@ -102,6 +105,7 @@ export const CAMPAIGN: readonly CampaignStage[] = [
         key: 'trono',
         arena: 'lago-gelado',
         enemyTeam: ['paladino', 'criomante', 'necromante', 'bardo', 'espadachim'],
+        boss: { slot: 1, id: 'rainha-do-gelo' },
     },
 ];
 

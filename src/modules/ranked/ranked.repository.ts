@@ -2,6 +2,8 @@ import { prisma } from '../../prisma';
 import type { Prisma, RankedDraft as DraftRow, RankedTicket as TicketRow } from '../../generated/prisma/client';
 import type { DraftAction } from './ranked.draft';
 import type { DraftChange, DraftStatus, RankedDraft, RankedResult, RankedSettlement, RankedStanding, RankedStore, RankedTicket, TicketStatus } from './ranked.types';
+import type { RankId } from './ranked.rules';
+import type { SeasonResult } from './ranked.season';
 
 function toTicket(row: TicketRow): RankedTicket {
     return {
@@ -43,10 +45,54 @@ export class RankedRepository implements RankedStore {
     async findStanding(userId: string): Promise<RankedStanding | null> {
         const user = await prisma.user.findUnique({
             where: { id: userId },
-            select: { rating: true, rankedWins: true, rankedLosses: true },
+            select: { rating: true, rankedWins: true, rankedLosses: true, rankedSeason: true },
         });
 
-        return user ? { rating: user.rating, wins: user.rankedWins, losses: user.rankedLosses } : null;
+        return user ? { rating: user.rating, wins: user.rankedWins, losses: user.rankedLosses, season: user.rankedSeason } : null;
+    }
+
+    async rollSeason(userId: string, from: string | null, to: string, next: { rating: number; wins: number; losses: number }, result: SeasonResult | null): Promise<boolean> {
+        return prisma.$transaction(async (tx) => {
+            const { count } = await tx.user.updateMany({
+                where: { id: userId, rankedSeason: from },
+                data: { rankedSeason: to, rating: next.rating, rankedWins: next.wins, rankedLosses: next.losses },
+            });
+
+            if (count === 0) return false;
+
+            if (result) {
+                const created = await tx.rankedSeasonResult.createMany({ data: [{ userId, ...result }], skipDuplicates: true });
+
+                if (created.count) {
+                    await tx.user.update({ where: { id: userId }, data: { gold: { increment: result.gold }, diamonds: { increment: result.diamonds } } });
+                }
+            }
+
+            return true;
+        });
+    }
+
+    async lastSeasonResult(userId: string): Promise<SeasonResult | null> {
+        const row = await prisma.rankedSeasonResult.findFirst({ where: { userId }, orderBy: { season: 'desc' } });
+
+        return row ? { season: row.season, rating: row.rating, rank: row.rank as RankId, wins: row.wins, losses: row.losses, gold: row.gold, diamonds: row.diamonds } : null;
+    }
+
+    async leaderboard(season: string, limit: number) {
+        const rows = await prisma.user.findMany({
+            where: { rankedSeason: season, deletedAt: null, OR: [{ rankedWins: { gt: 0 } }, { rankedLosses: { gt: 0 } }] },
+            orderBy: [{ rating: 'desc' }, { rankedWins: 'desc' }, { name: 'asc' }],
+            take: limit,
+            select: { id: true, name: true, rating: true, rankedWins: true, rankedLosses: true },
+        });
+
+        return rows.map((row) => ({ userId: row.id, name: row.name, rating: row.rating, wins: row.rankedWins, losses: row.rankedLosses }));
+    }
+
+    async countAbove(season: string, rating: number): Promise<number> {
+        return prisma.user.count({
+            where: { rankedSeason: season, deletedAt: null, rating: { gt: rating }, OR: [{ rankedWins: { gt: 0 } }, { rankedLosses: { gt: 0 } }] },
+        });
     }
 
     async findTicket(userId: string): Promise<RankedTicket | null> {

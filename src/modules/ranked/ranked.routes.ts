@@ -17,6 +17,7 @@ export function createRankedRouter(service: RankedService, guard?: RequestHandle
     rankedRouter.use(authMiddleware);
 
     rankedRouter.get('/', controller.profile);
+    rankedRouter.get('/leaderboard', controller.leaderboard);
     rankedRouter.get('/queue', controller.queue);
     rankedRouter.post('/queue', ...(guard ? [guard] : []), controller.enter);
     rankedRouter.delete('/queue', controller.leave);

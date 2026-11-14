@@ -1,6 +1,6 @@
 import { prisma } from '../../prisma';
 import type { Achievement } from './progression.catalog';
-import type { Currency, Metrics, ProgressionStore } from './progression.service';
+import type { Currency, FinishedBattle, Metrics, ProgressionStore } from './progression.service';
 
 /** Partidas que contam: terminadas e fora do treino (o treino não tem nível nem adversário). */
 const counted = { status: 'finished', OR: [{ difficulty: { not: null } }, { opponentId: { not: null } }] };
@@ -110,6 +110,62 @@ export class ProgressionRepository implements ProgressionStore {
 
     async setBattleAchievements(battleId: string, userId: string, achievements: string[]) {
         await prisma.battleReward.update({ where: { battleId_userId: { battleId, userId } }, data: { achievements } });
+    }
+
+    async finishedSince(userId: string, since: Date): Promise<FinishedBattle[]> {
+        const rows = await prisma.battle.findMany({
+            where: { AND: [counted, { OR: [{ userId }, { opponentId: userId }] }, { finishedAt: { gte: since } }] },
+            select: {
+                userId: true,
+                opponentId: true,
+                winner: true,
+                ranked: true,
+                difficulty: true,
+                campaignStage: true,
+                towerFloor: true,
+                finishedAt: true,
+                picks: { where: { userId }, select: { characterId: true } },
+            },
+        });
+
+        return rows.map((row) => ({
+            won: row.winner === (row.userId === userId ? 'A' : 'B'),
+            versus: row.opponentId !== null,
+            ranked: row.ranked,
+            difficulty: row.difficulty,
+            campaign: row.campaignStage !== null,
+            tower: row.towerFloor !== null,
+            characterIds: row.picks.map((pick) => pick.characterId),
+            finishedAt: row.finishedAt ?? since,
+        }));
+    }
+
+    async campaignClears(userId: string) {
+        const rows = await prisma.battle.findMany({
+            where: { userId, opponentId: null, campaignStage: { not: null }, status: 'finished', winner: 'A' },
+            distinct: ['campaignStage', 'difficulty'],
+            select: { campaignStage: true, difficulty: true },
+        });
+
+        return rows.map((row) => ({ stage: row.campaignStage ?? 0, difficulty: row.difficulty ?? 'normal' }));
+    }
+
+    async claimed(userId: string, keys: string[]) {
+        if (!keys.length) return [];
+
+        return (await prisma.userClaim.findMany({ where: { userId, key: { in: keys } }, select: { key: true } })).map((row) => row.key);
+    }
+
+    async claim(userId: string, key: string, gold: number, diamonds: number) {
+        return prisma.$transaction(async (tx) => {
+            const created = await tx.userClaim.createMany({ data: [{ userId, key, gold, diamonds }], skipDuplicates: true });
+
+            if (created.count === 0) return false;
+
+            if (gold || diamonds) await tx.user.update({ where: { id: userId }, data: { gold: { increment: gold }, diamonds: { increment: diamonds } } });
+
+            return true;
+        });
     }
 
     async battleReward(battleId: string, userId: string) {

@@ -7,6 +7,7 @@ import type { ProgressionService } from './progression.service';
 /**
  * GET  /api/progression                     ouro, diamantes, personagens, conquistas e a loja
  * POST /api/progression/shop                { characterId, currency: "gold" | "diamonds" }: compra um personagem
+ * POST /api/progression/claim               { type: "daily" | "weekly", id } ou { type: "chest", at }: resgata a recompensa
  * GET  /api/progression/battles/:id         o que o jogador ganhou naquela batalha
  * POST /api/progression/users/:id/grant     { gold, diamonds } (administrador): dá ou tira recursos
  */
@@ -31,6 +32,17 @@ export function createProgressionRouter(service: ProgressionService): Router {
 
     router.get('/', handle((req) => service.view(req.user!.id)));
     router.post('/shop', handle((req) => service.buy(req.user!.id, String(req.body?.characterId ?? ''), req.body?.currency === 'diamonds' ? 'diamonds' : 'gold')));
+    router.post(
+        '/claim',
+        handle((req) => {
+            const { type, id, at } = req.body ?? {};
+
+            if (type === 'chest') return service.claim(req.user!.id, { type, at: Number(at) });
+            if ((type === 'daily' || type === 'weekly') && typeof id === 'string') return service.claim(req.user!.id, { type, id });
+
+            throw new ProgressionError('UNKNOWN_REWARD', 400, 'progression.unknownReward');
+        }),
+    );
     router.get(
         '/battles/:id',
         handle(async (req) => {

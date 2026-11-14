@@ -682,6 +682,7 @@ function buildTeam(team: TeamId, characters: CharacterDefinition[]): BattleUnit[
             skills: structuredClone(character.skills),
             passives: structuredClone(character.passives ?? []),
             ...(character.summons?.length && { summons: structuredClone(character.summons) }),
+            ...(character.boss && { boss: true }),
             // Quem se transforma leva junto as formas e a original, para voltar.
             ...(character.forms?.length && {
                 forms: structuredClone(character.forms),

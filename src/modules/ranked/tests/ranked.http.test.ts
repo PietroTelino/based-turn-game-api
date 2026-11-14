@@ -100,7 +100,10 @@ describe('rotas /api/ranked, replay e estatísticas', () => {
             wins: 0,
             losses: 0,
             queue: { status: 'idle', draftId: null, battleId: null, waitedSeconds: 0 },
+            season: body.season,
+            lastSeason: null,
         });
+        assert.equal(body.season.id, new Date().toISOString().slice(0, 7));
     });
 
     it('fora de uma seleção, /ranked/draft responde 404', async () => {

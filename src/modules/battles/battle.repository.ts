@@ -18,6 +18,7 @@ const SUMMARY_FIELDS = {
     ratingDeltaB: true,
     difficulty: true,
     campaignStage: true,
+    towerFloor: true,
     createdAt: true,
     updatedAt: true,
     finishedAt: true,
@@ -44,6 +45,7 @@ function toSummary(row: SummaryRow): BattleSummaryRow {
         ratingDeltaB: row.ratingDeltaB,
         difficulty: row.difficulty as AiDifficulty | null,
         campaignStage: row.campaignStage,
+        towerFloor: row.towerFloor,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         finishedAt: row.finishedAt,
@@ -88,6 +90,7 @@ export class BattleRepository implements BattleStore {
                 ranked: extra.ranked === true,
                 difficulty: extra.difficulty ?? null,
                 campaignStage: extra.campaignStage ?? null,
+                towerFloor: extra.towerFloor ?? null,
                 // Os personagens escolhidos entram junto com a batalha, na mesma gravação.
                 picks: { create: extra.picks.map((pick) => ({ userId: pick.userId, characterId: pick.characterId })) },
             },
@@ -129,6 +132,15 @@ export class BattleRepository implements BattleStore {
         });
 
         return rows.map((row) => ({ stage: row.campaignStage ?? 0, difficulty: (row.difficulty ?? 'normal') as AiDifficulty }));
+    }
+
+    async findTowerBest(userId: string): Promise<number> {
+        const row = await prisma.battle.aggregate({
+            where: { userId, opponentId: null, towerFloor: { not: null }, status: 'finished', winner: 'A' },
+            _max: { towerFloor: true },
+        });
+
+        return row._max.towerFloor ?? 0;
     }
 
     async saveIfStep(id: string, expectedStep: number, snapshot: BattleSnapshot, events: BattleEvent[]): Promise<BattleRecord | null> {

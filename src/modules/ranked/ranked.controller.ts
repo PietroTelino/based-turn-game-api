@@ -6,6 +6,19 @@ import type { RankedService } from './ranked.service';
 export class RankedController {
     constructor(private service: RankedService) {}
 
+    /** GET /leaderboard — os melhores da temporada e a posição de quem pediu. */
+    leaderboard = async (req: Request, res: Response) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
+            }
+
+            return res.json(await this.service.leaderboard(req.user.id));
+        } catch (error) {
+            return this.handleError(req, res, error);
+        }
+    };
+
     /** GET / — os pontos, o rank e a situação na fila de quem pediu. */
     profile = async (req: Request, res: Response) => {
         try {

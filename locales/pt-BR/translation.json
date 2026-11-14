@@ -91,6 +91,8 @@
         "invalidDifficulty": "Nível de dificuldade inválido: use easy, normal ou hard",
         "unknownStage": "Fase da campanha desconhecida: {{stage}}",
         "stageLocked": "Essa fase ainda está bloqueada: vença a fase anterior primeiro",
+        "unknownFloor": "Andar da torre desconhecido: {{floor}}",
+        "towerLocked": "Esse andar da torre ainda não está aberto: vença o anterior primeiro",
         "errorUnexpected": "Erro ao processar a batalha",
         "rules": {
             "INVALID_SETUP": "Configuração de batalha inválida",
@@ -104,6 +106,17 @@
             "SKILL_USED_UP": "Essa habilidade já foi usada nesta batalha"
         },
         "characterLocked": "Você ainda não desbloqueou {{id}}: complete a conquista dele ou compre na loja."
+    },
+    "friends": {
+        "self": "Você não pode adicionar a si mesmo.",
+        "userNotFound": "Jogador não encontrado.",
+        "already": "Vocês já são amigos.",
+        "alreadyRequested": "O pedido já foi enviado.",
+        "requestNotFound": "Pedido de amizade não encontrado.",
+        "notFriends": "Só dá para convidar amigos.",
+        "roomNotFound": "Sala não encontrada.",
+        "roomNotWaiting": "A sala não está mais esperando jogadores.",
+        "errorUnexpected": "Erro ao processar os amigos"
     },
     "room": {
         "notFound": "Sala não encontrada",
@@ -135,6 +148,9 @@
         "unknownCharacter": "Personagem desconhecido: {{id}}",
         "notForSale": "Este personagem não está à venda.",
         "alreadyOwned": "Você já tem este personagem.",
+        "unknownReward": "Recompensa desconhecida.",
+        "notCompleted": "Essa recompensa ainda não foi alcançada.",
+        "alreadyClaimed": "Essa recompensa já foi resgatada.",
         "insufficient": {
             "gold": "Ouro insuficiente.",
             "diamonds": "Diamantes insuficientes."

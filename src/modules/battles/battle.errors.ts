@@ -9,6 +9,8 @@ export type BattleErrorCode =
     | 'INVALID_DIFFICULTY'
     | 'UNKNOWN_STAGE'
     | 'STAGE_LOCKED'
+    | 'UNKNOWN_FLOOR'
+    | 'TOWER_LOCKED'
     | 'CHARACTER_LOCKED';
 
 /**

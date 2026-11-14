@@ -9,6 +9,9 @@ import {
     createBattle,
     getCampaignStage,
     getActiveUnit,
+    getBoss,
+    towerFloor,
+    applyTowerModifiers,
     getAvailableActions,
     getFuryBonus,
     surrender,
@@ -27,6 +30,7 @@ import type {
     CampaignStageView,
     PublicBattleState,
     ReplayResponse,
+    TowerView,
 } from './battle.types';
 
 /**
@@ -90,6 +94,8 @@ export interface CreateBattleInput {
      * `enemyTeam` é ignorado). A fase precisa estar aberta para o jogador.
      */
     campaignStage?: number;
+    /** Um andar da torre: o próximo que o jogador ainda não venceu. Time, cenário e nível são os do andar. */
+    towerFloor?: number;
 }
 
 /**
@@ -137,6 +143,15 @@ export class BattleService {
     }
 
     private lockedOf: ((userId: string, team: string[]) => Promise<string | null>) | null = null;
+    private canWatch: ((viewerId: string, playerIds: string[]) => Promise<boolean>) | null = null;
+
+    /**
+     * Quem diz se alguém pode assistir às batalhas de outros jogadores (é amigo
+     * deles: src/modules/friends). Sem isto (nos testes), ninguém assiste.
+     */
+    setViewerCheck(canWatch: (viewerId: string, playerIds: string[]) => Promise<boolean>): void {
+        this.canWatch = canWatch;
+    }
 
     /**
      * Quem diz se o jogador já tem os personagens (src/modules/progression).
@@ -185,7 +200,27 @@ export class BattleService {
             enemyTeam: [...stage.enemyTeam],
             unlocked: stage.stage === 1 || wins.some((win) => win.stage === stage.stage - 1),
             clearedOn: AI_DIFFICULTIES.filter((difficulty) => wins.some((win) => win.stage === stage.stage && win.difficulty === difficulty)),
+            boss: stage.boss ? { slot: stage.boss.slot, name: getBoss(stage.boss.id)?.name ?? stage.boss.id } : null,
         }));
+    }
+
+    /** A torre: o andar mais alto vencido e o próximo, com o time e os modificadores dele. */
+    async tower(userId: string): Promise<TowerView> {
+        const best = await this.store.findTowerBest(userId);
+        const floor = towerFloor(best + 1, CHARACTERS.map((character) => character.id));
+
+        return {
+            best,
+            next: {
+                floor: floor.floor,
+                enemyTeam: floor.enemyTeam,
+                arena: floor.arena,
+                difficulty: floor.difficulty,
+                modifiers: floor.modifiers,
+                scalePercent: Math.round((floor.scale - 1) * 100),
+                reward: floor.reward,
+            },
+        };
     }
 
     async create(userId: string, input: CreateBattleInput): Promise<BattleResponse> {
@@ -197,13 +232,24 @@ export class BattleService {
         }
 
         const stage = input.campaignStage !== undefined ? await this.openStage(userId, input.campaignStage) : undefined;
-        // A fase tem o time dela. Nos testes de 1 contra 1, entram só os primeiros.
-        const teamB = stage
+        const floor = input.towerFloor !== undefined && !stage ? await this.openFloor(userId, input.towerFloor) : undefined;
+        // A fase e o andar têm o time deles. Nos testes de 1 contra 1, entram só os primeiros.
+        let teamB = stage
             ? this.resolveTeam(stage.enemyTeam.slice(0, this.teamSize))
-            : input.enemyTeam
-              ? this.resolveTeam(input.enemyTeam)
-              : this.pickEnemyTeam(teamA.length);
-        const difficulty = input.training ? undefined : (input.difficulty ?? 'normal');
+            : floor
+              ? applyTowerModifiers(this.resolveTeam(floor.enemyTeam.slice(0, this.teamSize)), floor)
+              : input.enemyTeam
+                ? this.resolveTeam(input.enemyTeam)
+                : this.pickEnemyTeam(teamA.length);
+
+        // O chefe da fase entra no lugar do personagem dele.
+        const boss = stage?.boss ? getBoss(stage.boss.id) : undefined;
+
+        if (stage?.boss && boss && stage.boss.slot < teamB.length) {
+            teamB = teamB.map((character, index) => (index === stage.boss!.slot ? boss : character));
+        }
+
+        const difficulty = input.training ? undefined : floor ? floor.difficulty : (input.difficulty ?? 'normal');
 
         // O treino sai sempre igual (TUTORIAL_SEED), para o roteiro do tutorial bater.
         const seed = input.seed ?? (input.training ? TUTORIAL_SEED : undefined);
@@ -228,9 +274,14 @@ export class BattleService {
             started.state.campaignStage = stage.stage;
         }
 
+        if (floor) {
+            started.state.towerFloor = floor.floor;
+            started.state.towerModifiers = floor.modifiers;
+        }
+
         // O cenário é sorteado depois do time da IA, para não mudar o time que sai de um mesmo sorteio.
-        // A fase da campanha tem o seu.
-        started.state.arena = stage ? stage.arena : this.pickArena();
+        // A fase da campanha e o andar da torre têm o seu.
+        started.state.arena = stage ? stage.arena : floor ? floor.arena : this.pickArena();
 
         // Se as unidades da IA forem as primeiras da ordem, ela já abre a batalha.
         const { state, events } = this.playAiActions(started);
@@ -241,6 +292,7 @@ export class BattleService {
             picks: input.training ? [] : picksOf(userId, teamA),
             ...(difficulty && { difficulty }),
             ...(stage && { campaignStage: stage.stage }),
+            ...(floor && { towerFloor: floor.floor }),
         });
 
         return { battle: this.toView(record, PLAYER_TEAM), events };
@@ -293,6 +345,19 @@ export class BattleService {
         return stage;
     }
 
+    /** O andar pedido, se é o próximo do jogador (o mais alto vencido + 1). */
+    private async openFloor(userId: string, number: number) {
+        if (!Number.isInteger(number) || number < 1) {
+            throw new BattleError('UNKNOWN_FLOOR', 400, 'battle.unknownFloor', { floor: String(number) });
+        }
+
+        if (number !== (await this.store.findTowerBest(userId)) + 1) {
+            throw new BattleError('TOWER_LOCKED', 403, 'battle.towerLocked');
+        }
+
+        return towerFloor(number, CHARACTERS.map((character) => character.id));
+    }
+
     /** `true` enquanto a batalha existe e ainda não acabou. A fila ranqueada usa para saber se o jogador está ocupado. */
     async isInProgress(battleId: string): Promise<boolean> {
         const record = UUID_PATTERN.test(battleId) ? await this.store.findById(battleId) : null;
@@ -314,10 +379,11 @@ export class BattleService {
     /**
      * A batalha encerrada, do começo ao fim: o estado de quando ela foi
      * criada e tudo o que aconteceu depois. Só quem jogou a batalha pode ver,
-     * e só as que guardaram o começo (as criadas antes do replay não têm).
+     * (ou é amigo de quem jogou), e só as que guardaram o começo (as criadas
+     * antes do replay não têm).
      */
     async replay(userId: string, battleId: string): Promise<ReplayResponse> {
-        const { record, team } = await this.findForPlayer(userId, battleId);
+        const { record, team } = await this.findForViewer(userId, battleId);
         const initial = record.status === 'finished' && record.hasReplay ? await this.store.findInitialState(record.id) : null;
 
         if (!initial) {
@@ -338,6 +404,18 @@ export class BattleService {
         const record = await this.playExpiredTurn(found.record);
 
         return { battle: this.toView(record, found.team), events: record.events.slice(Math.max(0, after)) };
+    }
+
+    /**
+     * Assistir: a batalha de um amigo (ou a própria), vista do lado A, sem
+     * poder jogar, e o que aconteceu depois dos `after` primeiros eventos. É a
+     * consulta que a tela do espectador repete.
+     */
+    async watch(userId: string, battleId: string, after: number): Promise<BattleResponse> {
+        const found = await this.findForViewer(userId, battleId);
+        const record = await this.playExpiredTurn(found.record);
+
+        return { battle: this.toView(record, found.team, found.spectating), events: record.events.slice(Math.max(0, after)) };
     }
 
     async act(userId: string, battleId: string, action: BattleAction): Promise<BattleResponse> {
@@ -464,7 +542,7 @@ export class BattleService {
     }
 
     /** A batalha como `team` a enxerga. */
-    private toView(record: BattleRecord, team: TeamId): BattleView {
+    private toView(record: BattleRecord, team: TeamId, spectating = false): BattleView {
         const active = getActiveUnit(record.state);
         const hasDeadline = isVersus(record) && record.status === 'in_progress';
 
@@ -476,13 +554,15 @@ export class BattleService {
             playerTeam: team,
             state: toPublicState(record.state),
             // Na vez do outro jogador não há o que escolher.
-            availableActions: active && active.team !== team ? [] : getAvailableActions(record.state),
+            availableActions: spectating || (active && active.team !== team) ? [] : getAvailableActions(record.state),
             cursor: record.events.length,
             hasReplay: record.hasReplay,
             ranked: record.ranked,
             ratingChange: team === 'A' ? record.ratingDeltaA : record.ratingDeltaB,
             difficulty: record.difficulty,
             campaignStage: record.campaignStage,
+            towerFloor: record.towerFloor,
+            spectating,
             turnTimeLeftMs: hasDeadline ? this.turnTimeLeft(record) : null,
             createdAt: record.createdAt,
             updatedAt: record.updatedAt,
@@ -504,6 +584,25 @@ export class BattleService {
         // Batalha gravada no formato antigo (antes dos turnos por rodada) é
         // convertida ao ser lida; as atuais passam direto.
         return { record: { ...record, state: upgradeState(record.state) }, team };
+    }
+
+    /** Como findForPlayer, mas também aceita quem só assiste (amigo de quem joga): o lado mostrado é o A. */
+    private async findForViewer(userId: string, battleId: string): Promise<{ record: BattleRecord; team: TeamId; spectating: boolean }> {
+        const record = UUID_PATTERN.test(battleId) ? await this.store.findById(battleId) : null;
+        const team = record ? teamOf(record, userId) : null;
+
+        if (record && team) {
+            return { record: { ...record, state: upgradeState(record.state) }, team, spectating: false };
+        }
+
+        const players = record ? [record.userId, ...(record.opponentId ? [record.opponentId] : [])] : [];
+
+        // O treino não tem graça de assistir e não aparece para os outros.
+        if (!record || record.state.training || !this.canWatch || !(await this.canWatch(userId, players))) {
+            throw new BattleError('BATTLE_NOT_FOUND', 404, 'battle.notFound');
+        }
+
+        return { record: { ...record, state: upgradeState(record.state) }, team: 'A', spectating: true };
     }
 
     private resolveTeam(ids: string[]): CharacterDefinition[] {

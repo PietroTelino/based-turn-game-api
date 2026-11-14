@@ -5,6 +5,8 @@ import { DRAFT_ORDER, DRAFT_TURN_MS, bannedOf, choicesOf, currentStep, refusalOf
 import type { DraftAction } from './ranked.draft';
 import { RankedError } from './ranked.errors';
 import { nextRankOf, rankFloorOf, rankOf, ratingChange, searchWindow } from './ranked.rules';
+import { SEASON_REWARDS, seasonEnd, seasonOf, softReset } from './ranked.season';
+import type { LeaderboardView } from './ranked.season';
 import type { DraftView, QueueView, RankedDraft, RankedProfile, RankedStore, RankedTicket } from './ranked.types';
 
 /**
@@ -64,6 +66,8 @@ export class RankedService {
 
     /** Os pontos, o rank e a situação na fila de quem pediu. */
     async profile(userId: string): Promise<RankedProfile> {
+        await this.ensureSeason(userId);
+
         const standing = await this.store.findStanding(userId);
 
         if (!standing) {
@@ -78,11 +82,62 @@ export class RankedService {
             wins: standing.wins,
             losses: standing.losses,
             queue: await this.queue(userId),
+            season: { id: seasonOf(this.now()), endsAt: seasonEnd(this.now()) },
+            lastSeason: await this.store.lastSeasonResult(userId),
         };
+    }
+
+    /** O placar de líderes da temporada atual e a posição de quem pediu. */
+    async leaderboard(userId: string, limit = 50): Promise<LeaderboardView> {
+        await this.ensureSeason(userId);
+
+        const season = seasonOf(this.now());
+        const rows = await this.store.leaderboard(season, limit);
+        const mine = await this.store.findStanding(userId);
+        const played = mine && mine.season === season && mine.wins + mine.losses > 0;
+
+        return {
+            season,
+            endsAt: seasonEnd(this.now()),
+            entries: rows.map((row, index) => ({ position: index + 1, userId: row.userId, name: row.name, points: row.rating, rank: rankOf(row.rating), wins: row.wins, losses: row.losses })),
+            you: played ? { position: (await this.store.countAbove(season, mine.rating)) + 1, points: mine.rating } : null,
+        };
+    }
+
+    /**
+     * Vira a temporada do jogador, se o mês mudou desde a última vez: guarda
+     * como ele terminou, paga a recompensa do rank e corta os pontos pela
+     * metade. Quem nunca passou por uma virada (as contas de antes das
+     * temporadas) só recebe a marca da temporada atual, sem perder nada.
+     */
+    private async ensureSeason(userId: string): Promise<void> {
+        const standing = await this.store.findStanding(userId);
+        const season = seasonOf(this.now());
+
+        if (!standing || standing.season === season) return;
+
+        if (standing.season === null) {
+            await this.store.rollSeason(userId, null, season, standing, null);
+
+            return;
+        }
+
+        const played = standing.wins + standing.losses > 0;
+        const rank = rankOf(standing.rating);
+
+        await this.store.rollSeason(
+            userId,
+            standing.season,
+            season,
+            { rating: softReset(standing.rating), wins: 0, losses: 0 },
+            played ? { season: standing.season, rating: standing.rating, rank, wins: standing.wins, losses: standing.losses, ...SEASON_REWARDS[rank] } : null,
+        );
     }
 
     /** Entra na fila. Se já houver alguém compatível esperando, a seleção de personagens começa aqui. */
     async enter(userId: string): Promise<QueueView> {
+        await this.ensureSeason(userId);
+
         const standing = await this.store.findStanding(userId);
 
         if (!standing) {
@@ -236,6 +291,10 @@ export class RankedService {
 
         const winnerId = battle.winner === 'A' ? battle.userId : battle.opponentId;
         const loserId = battle.winner === 'A' ? battle.opponentId : battle.userId;
+
+        // A partida conta para a temporada em que acabou.
+        await this.ensureSeason(winnerId);
+        await this.ensureSeason(loserId);
 
         await this.store.settle({ battleId: battle.id, winnerId, loserId, winnerTeam: battle.winner }, ratingChange);
     }

@@ -1,305 +1,383 @@
 generator client {
-    provider = "prisma-client"
-    output   = "../src/generated/prisma"
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
-    provider = "postgresql"
+  provider = "postgresql"
 }
 
 model User {
-    id              String          @id @default(uuid()) @db.Uuid
-    name            String
-    email           String          @unique
-    password        String
-    role            String          @default("user")
+  id       String @id @default(uuid()) @db.Uuid
+  name     String
+  email    String @unique
+  password String
+  role     String @default("user")
 
-    inactivatedAt   DateTime?       @map("inactivated_at")
-    deletedAt       DateTime?       @map("deleted_at")
-    // Conta removida: o e-mail dela fica guardado aqui e a coluna `email` recebe uma marca
-    // ("deleted:<id>"). Assim o e-mail fica livre para uma conta nova, e a restauração sabe
-    // qual e-mail devolver.
-    deletedEmail    String?         @map("deleted_email")
-    // Quando o jogador terminou a batalha de treino. Enquanto está vazio, o tutorial é
-    // obrigatório: as outras partidas ficam travadas (src/modules/tutorial).
-    tutorialCompletedAt DateTime?   @map("tutorial_completed_at")
-    createdAt       DateTime        @default(now()) @map("created_at")
-    updatedAt       DateTime        @updatedAt      @map("updated_at")
+  inactivatedAt       DateTime? @map("inactivated_at")
+  deletedAt           DateTime? @map("deleted_at")
+  // Conta removida: o e-mail dela fica guardado aqui e a coluna `email` recebe uma marca
+  // ("deleted:<id>"). Assim o e-mail fica livre para uma conta nova, e a restauração sabe
+  // qual e-mail devolver.
+  deletedEmail        String?   @map("deleted_email")
+  // Quando o jogador terminou a batalha de treino. Enquanto está vazio, o tutorial é
+  // obrigatório: as outras partidas ficam travadas (src/modules/tutorial).
+  tutorialCompletedAt DateTime? @map("tutorial_completed_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
 
-    preferences     Json?           @map("preferences")
+  preferences Json? @map("preferences")
 
-    // Partidas ranqueadas: os pontos (é deles que sai o rank) e o placar.
-    rating          Int             @default(0)
-    rankedWins      Int             @default(0) @map("ranked_wins")
-    rankedLosses    Int             @default(0) @map("ranked_losses")
+  // Partidas ranqueadas: os pontos (é deles que sai o rank) e o placar.
+  rating       Int     @default(0)
+  rankedWins   Int     @default(0) @map("ranked_wins")
+  rankedLosses Int     @default(0) @map("ranked_losses")
+  // A temporada (ex.: "2026-11") a que os pontos e o placar acima pertencem. Quando a
+  // temporada vira, o resultado vai para ranked_season_results e os pontos caem pela metade.
+  rankedSeason String? @map("ranked_season")
 
-    // Recursos: o ouro se ganha jogando; os diamantes são o recurso pago (por enquanto, só
-    // conquistas raras e o administrador dão diamantes).
-    gold            Int             @default(0)
-    diamonds        Int             @default(0)
+  // Recursos: o ouro se ganha jogando; os diamantes são o recurso pago (por enquanto, só
+  // conquistas raras e o administrador dão diamantes).
+  gold     Int @default(0)
+  diamonds Int @default(0)
 
-    passwordResets  PasswordReset[] 
-    refreshTokens   RefreshToken[]
-    auditLogs       AuditLog[]      @relation("UserAudits")
-    performedAudits AuditLog[]      @relation("PerformedByAudits")
-    battles         Battle[]        @relation("BattlePlayer")
-    opponentBattles Battle[]        @relation("BattleOpponent")
-    hostedRooms     Room[]          @relation("RoomHost")
-    joinedRooms     Room[]          @relation("RoomGuest")
-    battlePicks     BattlePick[]
-    rankedTicket    RankedTicket?
-    characters      UserCharacter[]
-    achievements    UserAchievement[]
-    battleRewards   BattleReward[]
+  passwordResets  PasswordReset[]
+  refreshTokens   RefreshToken[]
+  auditLogs       AuditLog[]           @relation("UserAudits")
+  performedAudits AuditLog[]           @relation("PerformedByAudits")
+  battles         Battle[]             @relation("BattlePlayer")
+  opponentBattles Battle[]             @relation("BattleOpponent")
+  hostedRooms     Room[]               @relation("RoomHost")
+  joinedRooms     Room[]               @relation("RoomGuest")
+  battlePicks     BattlePick[]
+  rankedTicket    RankedTicket?
+  characters      UserCharacter[]
+  achievements    UserAchievement[]
+  battleRewards   BattleReward[]
+  claims          UserClaim[]
+  seasonResults   RankedSeasonResult[]
+  friendRequests  Friendship[]         @relation("FriendRequester")
+  friendInvites   Friendship[]         @relation("FriendAddressee")
+  sentInvites     RoomInvite[]         @relation("InviteFrom")
+  receivedInvites RoomInvite[]         @relation("InviteTo")
 
-    @@map("users")
+  @@map("users")
 }
 
 model PasswordReset {
-    id        String    @id @default(uuid()) @db.Uuid
-    userId    String    @map("user_id") @db.Uuid
-    user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-    token     String    @unique
-    createdAt DateTime  @default(now()) @map("created_at")
-    expiresAt DateTime  @map("expires_at")
-    usedAt    DateTime? @map("used_at")
+  token     String    @unique
+  createdAt DateTime  @default(now()) @map("created_at")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
 
-    @@map("password_resets")
-    @@index([token])
+  @@index([token])
+  @@map("password_resets")
 }
 
 model RefreshToken {
-    id        String    @id @default(uuid())
-    userId    String    @map("user_id") @db.Uuid
-    user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-    token     String    @unique
-    createdAt DateTime  @default(now())
-    expiresAt DateTime
-    revoked   Boolean   @default(false)
+  token     String   @unique
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
 
-    userAgent String?  @map("user_agent")
-    ipAddress String?  @map("ip_address")
+  userAgent String? @map("user_agent")
+  ipAddress String? @map("ip_address")
 
-    @@map("refresh_tokens")
+  @@map("refresh_tokens")
 }
 
 model AuditLog {
-    id              String   @id @default(uuid()) @db.Uuid
-    userId          String?  @map("user_id") @db.Uuid
-    user            User?    @relation("UserAudits", fields: [userId], references: [id], onDelete: SetNull)
-    performedById   String?  @map("performed_by_id") @db.Uuid
-    performedBy     User?    @relation("PerformedByAudits", fields: [performedById], references: [id], onDelete: SetNull)
-    action          String
-    entity          String
-    entityId        String?  @map("entity_id") @db.Uuid
-    details         Json?
-    ipAddress       String?  @map("ip_address")
-    userAgent       String?  @map("user_agent")
-    createdAt       DateTime @default(now()) @map("created_at")
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String?  @map("user_id") @db.Uuid
+  user          User?    @relation("UserAudits", fields: [userId], references: [id], onDelete: SetNull)
+  performedById String?  @map("performed_by_id") @db.Uuid
+  performedBy   User?    @relation("PerformedByAudits", fields: [performedById], references: [id], onDelete: SetNull)
+  action        String
+  entity        String
+  entityId      String?  @map("entity_id") @db.Uuid
+  details       Json?
+  ipAddress     String?  @map("ip_address")
+  userAgent     String?  @map("user_agent")
+  createdAt     DateTime @default(now()) @map("created_at")
 
-    @@map("audit_logs")
-    @@index([userId])
-    @@index([performedById])
-    @@index([action])
-    @@index([entity])
-    @@index([createdAt])
+  @@index([userId])
+  @@index([performedById])
+  @@index([action])
+  @@index([entity])
+  @@index([createdAt])
+  @@map("audit_logs")
 }
 
 model Battle {
-    id          String    @id @default(uuid()) @db.Uuid
-    // Quem controla o time A. Contra a IA, é o único jogador.
-    userId      String    @map("user_id") @db.Uuid
-    user        User      @relation("BattlePlayer", fields: [userId], references: [id], onDelete: Cascade)
-    // Quem controla o time B numa batalha entre dois jogadores. Vazio quando o time B é da IA.
-    opponentId  String?   @map("opponent_id") @db.Uuid
-    opponent    User?     @relation("BattleOpponent", fields: [opponentId], references: [id], onDelete: Cascade)
+  id         String  @id @default(uuid()) @db.Uuid
+  // Quem controla o time A. Contra a IA, é o único jogador.
+  userId     String  @map("user_id") @db.Uuid
+  user       User    @relation("BattlePlayer", fields: [userId], references: [id], onDelete: Cascade)
+  // Quem controla o time B numa batalha entre dois jogadores. Vazio quando o time B é da IA.
+  opponentId String? @map("opponent_id") @db.Uuid
+  opponent   User?   @relation("BattleOpponent", fields: [opponentId], references: [id], onDelete: Cascade)
 
-    // "in_progress" | "finished"
-    status      String    @default("in_progress")
-    // "A" | "B" | null enquanto a batalha não termina
-    winner      String?
-    // Cópia de state.turn: o turno (a rodada em que todos agem uma vez). Aparece no histórico.
-    turn        Int       @default(1)
-    // Cópia de state.step: sobe a cada vez jogada. Serve para recusar duas ações simultâneas.
-    step        Int       @default(0)
-    // O BattleState inteiro do motor (src/game), em JSON.
-    state       Json
-    // Tudo o que aconteceu na batalha, em ordem (lista de BattleEvent). Entre dois jogadores,
-    // é por aqui que cada um acompanha as jogadas do outro; depois que a batalha acaba, é o replay.
-    // Vazio nas batalhas contra a IA criadas antes de o replay existir.
-    events      Json?
-    // O BattleState como saiu de createBattle, antes de qualquer jogada: é de onde o replay começa.
-    initialState Json?    @map("initial_state")
-    // Tem `initialState` e os eventos desde o começo (as batalhas antigas não têm).
-    hasReplay   Boolean   @default(false) @map("has_replay")
+  // "in_progress" | "finished"
+  status       String  @default("in_progress")
+  // "A" | "B" | null enquanto a batalha não termina
+  winner       String?
+  // Cópia de state.turn: o turno (a rodada em que todos agem uma vez). Aparece no histórico.
+  turn         Int     @default(1)
+  // Cópia de state.step: sobe a cada vez jogada. Serve para recusar duas ações simultâneas.
+  step         Int     @default(0)
+  // O BattleState inteiro do motor (src/game), em JSON.
+  state        Json
+  // Tudo o que aconteceu na batalha, em ordem (lista de BattleEvent). Entre dois jogadores,
+  // é por aqui que cada um acompanha as jogadas do outro; depois que a batalha acaba, é o replay.
+  // Vazio nas batalhas contra a IA criadas antes de o replay existir.
+  events       Json?
+  // O BattleState como saiu de createBattle, antes de qualquer jogada: é de onde o replay começa.
+  initialState Json?   @map("initial_state")
+  // Tem `initialState` e os eventos desde o começo (as batalhas antigas não têm).
+  hasReplay    Boolean @default(false) @map("has_replay")
 
-    // Partida ranqueada (veio da fila de pareamento) e os pontos que cada lado ganhou ou
-    // perdeu quando ela acabou. Os dois ficam vazios até o resultado ser lançado.
-    ranked        Boolean @default(false)
-    ratingDeltaA  Int?    @map("rating_delta_a")
-    ratingDeltaB  Int?    @map("rating_delta_b")
+  // Partida ranqueada (veio da fila de pareamento) e os pontos que cada lado ganhou ou
+  // perdeu quando ela acabou. Os dois ficam vazios até o resultado ser lançado.
+  ranked       Boolean @default(false)
+  ratingDeltaA Int?    @map("rating_delta_a")
+  ratingDeltaB Int?    @map("rating_delta_b")
 
-    // Contra a IA: o nível dela ("easy" | "normal" | "hard"). Vazio entre jogadores, no treino e
-    // nas batalhas de antes da escolha de nível.
-    difficulty    String?
-    // Batalha da campanha: a fase (1, 2...). Vazio nas outras. Com o vencedor, diz até onde o
-    // jogador já chegou na campanha.
-    campaignStage Int?    @map("campaign_stage")
+  // Contra a IA: o nível dela ("easy" | "normal" | "hard"). Vazio entre jogadores, no treino e
+  // nas batalhas de antes da escolha de nível.
+  difficulty    String?
+  // Batalha da campanha: a fase (1, 2...). Vazio nas outras. Com o vencedor, diz até onde o
+  // jogador já chegou na campanha.
+  campaignStage Int?    @map("campaign_stage")
+  // Batalha da torre: o andar (1, 2...). Vazio nas outras.
+  towerFloor    Int?    @map("tower_floor")
 
-    picks       BattlePick[]
+  picks BattlePick[]
 
-    createdAt   DateTime  @default(now()) @map("created_at")
-    updatedAt   DateTime  @updatedAt      @map("updated_at")
-    finishedAt  DateTime? @map("finished_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  finishedAt DateTime? @map("finished_at")
 
-    @@map("battles")
-    @@index([userId, createdAt])
-    @@index([opponentId, createdAt])
-    @@index([userId, campaignStage])
+  @@index([userId, createdAt])
+  @@index([opponentId, createdAt])
+  @@index([userId, campaignStage])
+  @@index([userId, towerFloor])
+  @@map("battles")
 }
 
 // Um personagem que um jogador levou para uma batalha. É daqui que saem as estatísticas de
 // "personagens mais usados". O time da IA e as batalhas de treino (tutorial) não entram.
 model BattlePick {
-    id          String   @id @default(uuid()) @db.Uuid
-    battleId    String   @map("battle_id") @db.Uuid
-    battle      Battle   @relation(fields: [battleId], references: [id], onDelete: Cascade)
-    userId      String   @map("user_id") @db.Uuid
-    user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-    characterId String   @map("character_id")
-    createdAt   DateTime @default(now()) @map("created_at")
+  id          String   @id @default(uuid()) @db.Uuid
+  battleId    String   @map("battle_id") @db.Uuid
+  battle      Battle   @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  userId      String   @map("user_id") @db.Uuid
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  characterId String   @map("character_id")
+  createdAt   DateTime @default(now()) @map("created_at")
 
-    @@map("battle_picks")
-    @@index([userId, characterId])
-    @@index([characterId])
-    @@index([battleId])
+  @@index([userId, characterId])
+  @@index([characterId])
+  @@index([battleId])
+  @@map("battle_picks")
 }
 
 // Fila das partidas ranqueadas: um bilhete por jogador. Ele entra com o time escolhido e
 // espera o pareamento automático; quando acha um adversário, o bilhete aponta para a batalha.
 model RankedTicket {
-    id          String   @id @default(uuid()) @db.Uuid
-    userId      String   @unique @map("user_id") @db.Uuid
-    user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-    // O time com que o jogador entrava na fila, antes da seleção de personagens. Hoje fica
-    // vazio: o time é montado na seleção (RankedDraft).
-    team        Json
-    // Os pontos do jogador quando entrou: a fila procura alguém com pontos parecidos.
-    rating      Int
-    // "searching" | "matching" | "matched" | "cancelled" (ver src/modules/ranked/ranked.types.ts)
-    status      String   @default("searching")
-    // Pareado: a seleção de personagens dos dois (e, quando ela acaba, a partida está nela).
-    draftId     String?  @map("draft_id") @db.Uuid
-    // A partida dos bilhetes de antes da seleção de personagens.
-    battleId    String?  @map("battle_id") @db.Uuid
-    // Quando entrou na fila (o bilhete é reaproveitado, então não é a data de criação da linha).
-    queuedAt    DateTime @default(now()) @map("queued_at")
-    // A última vez que a tela do jogador perguntou pela fila. Quem para de perguntar saiu.
-    lastSeenAt  DateTime @default(now()) @map("last_seen_at")
-    updatedAt   DateTime @updatedAt      @map("updated_at")
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @unique @map("user_id") @db.Uuid
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // O time com que o jogador entrava na fila, antes da seleção de personagens. Hoje fica
+  // vazio: o time é montado na seleção (RankedDraft).
+  team       Json
+  // Os pontos do jogador quando entrou: a fila procura alguém com pontos parecidos.
+  rating     Int
+  // "searching" | "matching" | "matched" | "cancelled" (ver src/modules/ranked/ranked.types.ts)
+  status     String   @default("searching")
+  // Pareado: a seleção de personagens dos dois (e, quando ela acaba, a partida está nela).
+  draftId    String?  @map("draft_id") @db.Uuid
+  // A partida dos bilhetes de antes da seleção de personagens.
+  battleId   String?  @map("battle_id") @db.Uuid
+  // Quando entrou na fila (o bilhete é reaproveitado, então não é a data de criação da linha).
+  queuedAt   DateTime @default(now()) @map("queued_at")
+  // A última vez que a tela do jogador perguntou pela fila. Quem para de perguntar saiu.
+  lastSeenAt DateTime @default(now()) @map("last_seen_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
-    @@map("ranked_tickets")
-    @@index([status, queuedAt])
+  @@index([status, queuedAt])
+  @@map("ranked_tickets")
 }
 
 // Sala do multiplayer: onde dois jogadores se encontram e escolhem os times antes da batalha.
 model Room {
-    id          String    @id @default(uuid()) @db.Uuid
-    // Código curto que os jogadores passam um para o outro para entrar (ex.: "K7QF2M").
-    code        String    @unique
-    // "waiting" | "selecting" | "starting" | "started" | "closed" (ver src/modules/rooms/room.types.ts)
-    status      String    @default("waiting")
+  id     String @id @default(uuid()) @db.Uuid
+  // Código curto que os jogadores passam um para o outro para entrar (ex.: "K7QF2M").
+  code   String @unique
+  // "waiting" | "selecting" | "starting" | "started" | "closed" (ver src/modules/rooms/room.types.ts)
+  status String @default("waiting")
 
-    // Quem criou a sala: fica com o time A.
-    hostId      String    @map("host_id") @db.Uuid
-    host        User      @relation("RoomHost", fields: [hostId], references: [id], onDelete: Cascade)
-    // Quem entrou: fica com o time B.
-    guestId     String?   @map("guest_id") @db.Uuid
-    guest       User?     @relation("RoomGuest", fields: [guestId], references: [id], onDelete: SetNull)
+  // Quem criou a sala: fica com o time A.
+  hostId  String  @map("host_id") @db.Uuid
+  host    User    @relation("RoomHost", fields: [hostId], references: [id], onDelete: Cascade)
+  // Quem entrou: fica com o time B.
+  guestId String? @map("guest_id") @db.Uuid
+  guest   User?   @relation("RoomGuest", fields: [guestId], references: [id], onDelete: SetNull)
 
-    // O time que cada um confirmou (lista de ids de personagens). Um não vê o do outro.
-    hostTeam    Json?     @map("host_team")
-    guestTeam   Json?     @map("guest_team")
-    hostReady   Boolean   @default(false) @map("host_ready")
-    guestReady  Boolean   @default(false) @map("guest_ready")
+  // O time que cada um confirmou (lista de ids de personagens). Um não vê o do outro.
+  hostTeam   Json?   @map("host_team")
+  guestTeam  Json?   @map("guest_team")
+  hostReady  Boolean @default(false) @map("host_ready")
+  guestReady Boolean @default(false) @map("guest_ready")
 
-    // A seleção de personagens dos dois (ranked_drafts, com ranked = false). Nasce quando o convidado entra.
-    draftId     String?   @map("draft_id") @db.Uuid
-    // A batalha criada quando a seleção acaba.
-    battleId    String?   @map("battle_id") @db.Uuid
+  // A seleção de personagens dos dois (ranked_drafts, com ranked = false). Nasce quando o convidado entra.
+  draftId  String?      @map("draft_id") @db.Uuid
+  // A batalha criada quando a seleção acaba.
+  battleId String?      @map("battle_id") @db.Uuid
+  invites  RoomInvite[]
 
-    createdAt   DateTime  @default(now()) @map("created_at")
-    updatedAt   DateTime  @updatedAt      @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-    @@map("rooms")
-    @@index([status, createdAt])
+  @@index([status, createdAt])
+  @@map("rooms")
 }
 
 // A seleção de personagens de uma partida ranqueada: os dois jogadores banem e escolhem,
 // alternando, à vista um do outro (src/modules/ranked/ranked.draft.ts).
 model RankedDraft {
-    id            String   @id @default(uuid()) @db.Uuid
-    // Quem fica com o time A e começa; o outro fica com o B.
-    hostId        String   @map("host_id") @db.Uuid
-    guestId       String   @map("guest_id") @db.Uuid
-    // false na seleção das salas (partida casual): a partida que sai dela não vale pontos.
-    ranked        Boolean  @default(true)
-    // O que já foi feito, em ordem: [{ team, kind: "ban" | "pick", characterId, auto }].
-    actions       Json     @default("[]")
-    // "drafting" | "starting" | "done"
-    status        String   @default("drafting")
-    // A partida criada quando a seleção acaba.
-    battleId      String?  @map("battle_id") @db.Uuid
-    // Quando começou o passo da vez: cada passo tem 30 segundos.
-    turnStartedAt DateTime @map("turn_started_at")
-    // Sobe a cada gravação: é a trava contra duas jogadas ao mesmo tempo.
-    version       Int      @default(0)
-    createdAt     DateTime @default(now()) @map("created_at")
-    updatedAt     DateTime @updatedAt      @map("updated_at")
+  id            String   @id @default(uuid()) @db.Uuid
+  // Quem fica com o time A e começa; o outro fica com o B.
+  hostId        String   @map("host_id") @db.Uuid
+  guestId       String   @map("guest_id") @db.Uuid
+  // false na seleção das salas (partida casual): a partida que sai dela não vale pontos.
+  ranked        Boolean  @default(true)
+  // O que já foi feito, em ordem: [{ team, kind: "ban" | "pick", characterId, auto }].
+  actions       Json     @default("[]")
+  // "drafting" | "starting" | "done"
+  status        String   @default("drafting")
+  // A partida criada quando a seleção acaba.
+  battleId      String?  @map("battle_id") @db.Uuid
+  // Quando começou o passo da vez: cada passo tem 30 segundos.
+  turnStartedAt DateTime @map("turn_started_at")
+  // Sobe a cada gravação: é a trava contra duas jogadas ao mesmo tempo.
+  version       Int      @default(0)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
-    @@map("ranked_drafts")
+  @@map("ranked_drafts")
 }
 
 // Um personagem que o jogador desbloqueou (os iniciais não têm linha: valem para todos).
 // `source`: "achievement" | "gold" | "diamonds" | "admin".
 model UserCharacter {
-    id          String   @id @default(uuid()) @db.Uuid
-    userId      String   @map("user_id") @db.Uuid
-    user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-    characterId String   @map("character_id")
-    source      String
-    createdAt   DateTime @default(now()) @map("created_at")
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  characterId String   @map("character_id")
+  source      String
+  createdAt   DateTime @default(now()) @map("created_at")
 
-    @@unique([userId, characterId])
-    @@map("user_characters")
+  @@unique([userId, characterId])
+  @@map("user_characters")
 }
 
 // Uma conquista que o jogador completou (a recompensa foi entregue junto). As conquistas
 // em si ficam no código (src/modules/progression/progression.catalog.ts).
 model UserAchievement {
-    id            String   @id @default(uuid()) @db.Uuid
-    userId        String   @map("user_id") @db.Uuid
-    user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-    achievementId String   @map("achievement_id")
-    completedAt   DateTime @default(now()) @map("completed_at")
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementId String   @map("achievement_id")
+  completedAt   DateTime @default(now()) @map("completed_at")
 
-    @@unique([userId, achievementId])
-    @@map("user_achievements")
+  @@unique([userId, achievementId])
+  @@map("user_achievements")
 }
 
 // O que um jogador ganhou ao fim de uma batalha (ouro e conquistas completadas nela).
 // Uma linha por jogador e batalha: é ela que impede pagar duas vezes.
 model BattleReward {
-    id           String   @id @default(uuid()) @db.Uuid
-    battleId     String   @map("battle_id") @db.Uuid
-    userId       String   @map("user_id") @db.Uuid
-    user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-    gold         Int
-    achievements Json     @default("[]")
-    createdAt    DateTime @default(now()) @map("created_at")
+  id           String   @id @default(uuid()) @db.Uuid
+  battleId     String   @map("battle_id") @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gold         Int
+  achievements Json     @default("[]")
+  createdAt    DateTime @default(now()) @map("created_at")
 
-    @@unique([battleId, userId])
-    @@map("battle_rewards")
+  @@unique([battleId, userId])
+  @@map("battle_rewards")
+}
+
+// Uma recompensa resgatada uma vez só: missão do dia/semana ("D2026-11-14:vitorias-3"),
+// baú de estrelas da campanha ("estrelas:10") ou andar da torre. A linha impede pagar duas vezes.
+model UserClaim {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key       String
+  gold      Int      @default(0)
+  diamonds  Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, key])
+  @@map("user_claims")
+}
+
+// Como o jogador terminou uma temporada ranqueada e o que ganhou por isso.
+model RankedSeasonResult {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  season    String
+  rating    Int
+  rank      String
+  wins      Int
+  losses    Int
+  gold      Int
+  diamonds  Int
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, season])
+  @@map("ranked_season_results")
+}
+
+// Amizade: começa como pedido ("pending") de quem pediu para quem recebeu; aceito, vira "accepted".
+model Friendship {
+  id          String   @id @default(uuid()) @db.Uuid
+  requesterId String   @map("requester_id") @db.Uuid
+  requester   User     @relation("FriendRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addresseeId String   @map("addressee_id") @db.Uuid
+  addressee   User     @relation("FriendAddressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+  status      String   @default("pending")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([requesterId, addresseeId])
+  @@index([addresseeId])
+  @@map("friendships")
+}
+
+// Convite de um amigo para a sala dele. Vale enquanto a sala espera alguém entrar.
+model RoomInvite {
+  id        String   @id @default(uuid()) @db.Uuid
+  roomId    String   @map("room_id") @db.Uuid
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  fromId    String   @map("from_id") @db.Uuid
+  from      User     @relation("InviteFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  toId      String   @map("to_id") @db.Uuid
+  to        User     @relation("InviteTo", fields: [toId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([roomId, toId])
+  @@index([toId])
+  @@map("room_invites")
 }

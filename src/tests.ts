@@ -9,3 +9,4 @@ import './modules/ranked/tests';
 import './modules/stats/tests';
 import './modules/tutorial/tests';
 import './modules/progression/tests';
+import './modules/friends/tests';

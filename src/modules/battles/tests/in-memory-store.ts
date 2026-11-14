@@ -34,6 +34,7 @@ export class InMemoryBattleStore implements BattleStore {
             ratingDeltaB: null,
             difficulty: extra.difficulty ?? null,
             campaignStage: extra.campaignStage ?? null,
+            towerFloor: extra.towerFloor ?? null,
             createdAt: now,
             updatedAt: now,
         };
@@ -63,6 +64,18 @@ export class InMemoryBattleStore implements BattleStore {
             .reverse()
             .slice(0, limit)
             .map(({ state: _state, events: _events, ...summary }) => summary);
+    }
+
+    async findTowerBest(userId: string): Promise<number> {
+        let best = 0;
+
+        for (const record of this.rows.values()) {
+            if (record.userId === userId && record.towerFloor !== null && record.status === 'finished' && record.winner === 'A') {
+                best = Math.max(best, record.towerFloor);
+            }
+        }
+
+        return best;
     }
 
     async findCampaignWins(userId: string): Promise<CampaignWin[]> {

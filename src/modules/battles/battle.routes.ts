@@ -22,10 +22,12 @@ export function createBattlesRouter(service: BattleService, guard?: RequestHandl
     battlesRouter.get('/', controller.list);
     // Antes de '/:id', senão "campaign" seria lido como o id de uma batalha.
     battlesRouter.get('/campaign', controller.campaign);
+    battlesRouter.get('/tower', controller.tower);
     battlesRouter.post('/', ...(guard ? [guard] : []), controller.create);
     battlesRouter.get('/:id', controller.getById);
     battlesRouter.get('/:id/events', controller.events);
     battlesRouter.get('/:id/replay', controller.replay);
+    battlesRouter.get('/:id/watch', controller.watch);
     battlesRouter.post('/:id/actions', controller.act);
     battlesRouter.post('/:id/surrender', controller.surrender);
 

@@ -125,8 +125,59 @@ describe('ranqueada: ranks e pontos', () => {
             wins: 0,
             losses: 0,
             queue: IDLE,
+            season: { id: '2026-10', endsAt: new Date('2026-11-01T00:00:00Z') },
+            lastSeason: null,
         });
         await rejectsWith(service.profile('ninguem'), 'PLAYER_NOT_FOUND');
+    });
+});
+
+describe('ranqueada: temporadas e placar de líderes', () => {
+    it('quando o mês vira, quem jogou recebe o prêmio do rank, os pontos caem pela metade e o placar zera', async () => {
+        const context = setup();
+
+        context.store.setStanding(ANA, { rating: 420, wins: 30, losses: 12, season: '2026-09' });
+        context.store.setStanding(BRUNO, { rating: 150, wins: 0, losses: 0, season: '2026-09' });
+
+        const ana = await context.service.profile(ANA);
+        const bruno = await context.service.profile(BRUNO);
+
+        assert.deepEqual([ana.points, ana.wins, ana.losses], [210, 0, 0]);
+        assert.deepEqual(ana.lastSeason, { season: '2026-09', rating: 420, rank: 'diamond', wins: 30, losses: 12, gold: 600, diamonds: 20 });
+        assert.equal(bruno.points, 75);
+        assert.equal(bruno.lastSeason, null, 'quem não jogou na temporada não ganha nada');
+
+        // A virada acontece uma vez só.
+        assert.equal((await context.service.profile(ANA)).points, 210);
+        assert.equal(context.store.results.length, 1);
+    });
+
+    it('conta antiga (sem temporada) só recebe a marca da temporada atual, sem perder pontos', async () => {
+        const context = setup();
+
+        context.store.setStanding(ANA, { rating: 300, wins: 5, losses: 1, season: null });
+
+        const ana = await context.service.profile(ANA);
+
+        assert.deepEqual([ana.points, ana.wins, ana.lastSeason], [300, 5, null]);
+    });
+
+    it('o placar mostra quem jogou na temporada, dos mais pontos para os menos, e a posição de quem pediu', async () => {
+        const context = setup();
+
+        context.store.setStanding(ANA, { rating: 120, wins: 4, losses: 2, season: '2026-10' });
+        context.store.setStanding(BRUNO, { rating: 260, wins: 9, losses: 3, season: '2026-10' });
+        context.store.setStanding(CAIO, { rating: 500, wins: 0, losses: 0, season: '2026-10' });
+
+        const board = await context.service.leaderboard(ANA);
+
+        assert.equal(board.season, '2026-10');
+        assert.deepEqual(board.entries.map((entry) => [entry.position, entry.userId, entry.points, entry.rank]), [
+            [1, BRUNO, 260, 'gold'],
+            [2, ANA, 120, 'silver'],
+        ]);
+        assert.deepEqual(board.you, { position: 2, points: 120 });
+        assert.equal((await context.service.leaderboard(CAIO)).you, null, 'sem partidas, fora do placar');
     });
 });
 

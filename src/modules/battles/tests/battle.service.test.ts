@@ -970,3 +970,77 @@ describe('BattleService: campanha', () => {
         await rejectsWith(service.create(PLAYER, { team: ['cavaleiro'], campaignStage: 0 }), 'UNKNOWN_STAGE');
     });
 });
+
+describe('BattleService: chefes, torre e espectador', () => {
+    function finish(store: InMemoryBattleStore, id: string, winner: 'A' | 'B') {
+        store.patch(id, { status: 'finished', winner });
+    }
+    it('a fase 6 tem o chefe no lugar do Necromante: mais vida e uma habilidade só dele', async () => {
+        const { store, service } = setup(TEAM_SIZE);
+
+        for (let stage = 1; stage <= 5; stage++) {
+            const { battle } = await service.create(PLAYER, { team: FIVE, campaignStage: stage, difficulty: 'easy' });
+
+            finish(store, battle.id, 'A');
+        }
+
+        const view = (await service.campaign(PLAYER))[5]!;
+
+        assert.deepEqual(view.boss, { slot: 1, name: 'Rei Lich' });
+
+        const { battle } = await service.create(PLAYER, { team: FIVE, campaignStage: 6 });
+        const boss = battle.state.units.find((unit) => unit.id === 'B2')!;
+        const base = getCharacter('necromante')!;
+
+        assert.equal(boss.boss, true);
+        assert.equal(boss.name, 'Rei Lich');
+        assert.equal(boss.characterId, 'necromante', 'a tela usa o modelo do Necromante');
+        assert.ok(boss.stats.maxHp > base.stats.maxHp * 2);
+        assert.ok(boss.skills.some((skill) => skill.id === 'rei-lich.inverno-da-morte'));
+    });
+
+    it('a torre abre andar por andar; o andar tem time, nível, cenário e modificadores próprios', async () => {
+        const { store, service } = setup(TEAM_SIZE);
+
+        assert.equal((await service.tower(PLAYER)).next.floor, 1);
+        await rejectsWith(service.create(PLAYER, { team: FIVE, towerFloor: 2 }), 'TOWER_LOCKED');
+        await rejectsWith(service.create(PLAYER, { team: FIVE, towerFloor: 0 }), 'UNKNOWN_FLOOR');
+
+        const first = await service.create(PLAYER, { team: FIVE, towerFloor: 1, difficulty: 'hard' });
+
+        assert.equal(first.battle.towerFloor, 1);
+        assert.equal(first.battle.difficulty, 'easy', 'o nível é o do andar, não o pedido');
+        finish(store, first.battle.id, 'A');
+
+        const tower = await service.tower(PLAYER);
+
+        assert.equal(tower.best, 1);
+        assert.equal(tower.next.floor, 2);
+
+        // Andar 3: o primeiro com modificador, e os inimigos já um pouco mais fortes.
+        finish(store, (await service.create(PLAYER, { team: FIVE, towerFloor: 2 })).battle.id, 'A');
+
+        const third = await service.create(PLAYER, { team: FIVE, towerFloor: 3 });
+        const enemy = third.battle.state.units.find((unit) => unit.team === 'B')!;
+        const base = getCharacter(enemy.characterId)!;
+
+        assert.equal(third.battle.state.towerModifiers?.length, 1);
+        assert.ok(enemy.stats.maxHp >= base.stats.maxHp);
+    });
+
+    it('o amigo assiste à batalha sem poder jogar; quem não é amigo não vê nada', async () => {
+        const { service } = setup();
+
+        service.setViewerCheck(async (viewer, players) => viewer === OTHER_PLAYER && players.includes(PLAYER));
+
+        const { battle } = await service.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], seed: 1 });
+        const watched = await service.watch(OTHER_PLAYER, battle.id, 0);
+
+        assert.equal(watched.battle.spectating, true);
+        assert.deepEqual(watched.battle.availableActions, []);
+        assert.ok(watched.events.length > 0);
+        await rejectsWith(service.watch('estranho', battle.id, 0), 'BATTLE_NOT_FOUND');
+        await rejectsWith(service.act(OTHER_PLAYER, battle.id, { unitId: 'A1', skillId: 'barbaro.machadada', targetId: 'B1' }), 'BATTLE_NOT_FOUND');
+        assert.equal((await service.watch(PLAYER, battle.id, 0)).battle.spectating, false);
+    });
+});
