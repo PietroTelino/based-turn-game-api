@@ -65,7 +65,7 @@ export const PVP_TURN_LIMIT_MS = 30_000;
  */
 export const TUTORIAL_SEED = 4;
 
-const LIST_LIMIT = 20;
+const LIST_LIMIT = 50;
 const MAX_AI_ACTIONS_IN_A_ROW = 100;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
