@@ -906,10 +906,7 @@ describe('BattleService: campanha', () => {
 
         assert.deepEqual(
             stages.map(({ stage, unlocked, clearedOn }) => ({ stage, unlocked, clearedOn })),
-            [
-                { stage: 1, unlocked: true, clearedOn: [] },
-                { stage: 2, unlocked: false, clearedOn: [] },
-            ],
+            CAMPAIGN.map(({ stage }) => ({ stage, unlocked: stage === 1, clearedOn: [] })),
         );
         assert.equal(stages[0]?.enemyTeam.length, TEAM_SIZE);
     });
@@ -943,7 +940,7 @@ describe('BattleService: campanha', () => {
 
         const stages = await service.campaign(PLAYER);
 
-        assert.deepEqual(stages.map((item) => item.unlocked), [true, true]);
+        assert.deepEqual(stages.map((item) => item.unlocked), CAMPAIGN.map(({ stage }) => stage <= 2));
         assert.deepEqual(stages[0]?.clearedOn, ['easy']);
 
         const second = await service.create(PLAYER, { team: ['cavaleiro'], campaignStage: 2 });
@@ -951,7 +948,7 @@ describe('BattleService: campanha', () => {
         assert.equal(second.battle.state.arena, CAMPAIGN[1]!.arena);
 
         // O progresso é de cada jogador.
-        assert.deepEqual((await service.campaign(OTHER_PLAYER)).map((item) => item.unlocked), [true, false]);
+        assert.deepEqual((await service.campaign(OTHER_PLAYER)).map((item) => item.unlocked), CAMPAIGN.map(({ stage }) => stage === 1));
     });
 
     it('os níveis vencidos de uma fase aparecem em ordem, sem repetir', async () => {

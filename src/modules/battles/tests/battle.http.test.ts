@@ -193,10 +193,7 @@ describe('rotas /api/battles', () => {
         assert.equal(status, 200);
         assert.deepEqual(
             body.map((stage: { stage: number; unlocked: boolean }) => [stage.stage, stage.unlocked]),
-            [
-                [1, true],
-                [2, false],
-            ],
+            Array.from({ length: 12 }, (_, index) => [index + 1, index === 0]),
         );
     });
 
