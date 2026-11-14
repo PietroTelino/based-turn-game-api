@@ -1,4 +1,7 @@
-import { CAMPAIGN, dailyChallenge, towerFloor } from '../../game';
+import { CAMPAIGN, dailyChallenge, eventOf, towerFloor } from '../../game';
+import type { EventMode } from '../../game';
+import { seasonEnd, seasonOf } from '../ranked/ranked.season';
+import { PASS_PRICE_DIAMONDS, PASS_TIERS, PASS_XP_PER_TIER, battleXp, levelOf, levelReward, passReward, titleOf } from './progression.levels';
 import type { BattleRecord } from '../battles/battle.types';
 import { ACHIEVEMENTS, CHARACTER_REFUND_GOLD, STARTER_CHARACTERS, battleGold, priceOf } from './progression.catalog';
 import type { Achievement, AchievementMetric, AchievementReward } from './progression.catalog';
@@ -45,9 +48,15 @@ export interface ProgressionStore {
     addFunds(userId: string, gold: number, diamonds: number): Promise<void>;
     unlock(userId: string, characterId: string, source: string): Promise<void>;
     /** Paga o ouro da batalha uma vez só. `false` se já tinha pago. */
-    payBattle(battleId: string, userId: string, gold: number): Promise<boolean>;
+    payBattle(battleId: string, userId: string, gold: number, xp: number): Promise<boolean>;
     setBattleAchievements(battleId: string, userId: string, achievements: string[]): Promise<void>;
-    battleReward(battleId: string, userId: string): Promise<{ gold: number; achievements: string[] } | null>;
+    battleReward(battleId: string, userId: string): Promise<{ gold: number; xp: number; achievements: string[] } | null>;
+    /** A experiência total do jogador. */
+    userXp(userId: string): Promise<number>;
+    /** A experiência que o jogador ganhou em batalhas desde `since` (o passe da temporada). */
+    xpSince(userId: string, since: Date): Promise<number>;
+    /** Compra com diamantes algo que vale uma vez só (o passe premium): grava a chave e debita juntos. */
+    buyWithDiamonds(userId: string, key: string, price: number): Promise<'ok' | 'owned' | 'insufficient'>;
     /** As batalhas que o jogador terminou desde `since` (fora o treino). */
     finishedSince(userId: string, since: Date): Promise<FinishedBattle[]>;
     /** As fases da campanha vencidas, com o nível de cada vitória. */
@@ -122,6 +131,42 @@ export interface ProgressionView {
     missions: { daily: MissionView[]; weekly: MissionView[]; dailyResetsAt: Date; weeklyResetsAt: Date };
     stars: StarsView;
     login: LoginView;
+    level: LevelView;
+    event: EventView;
+    pass: PassView;
+}
+
+/** O nível de conta. */
+export interface LevelView {
+    level: number;
+    xp: number;
+    xpIntoLevel: number;
+    /** Quanto o nível atual pede para chegar ao próximo (0 no nível máximo). */
+    xpForNext: number;
+    title: string;
+}
+
+/** O evento da semana. */
+export interface EventView {
+    id: string;
+    element: string;
+    bonus: number;
+    goldMode: EventMode;
+    goldMultiplier: number;
+    endsAt: Date;
+}
+
+/** O passe da temporada (mês). */
+export interface PassView {
+    season: string;
+    endsAt: Date;
+    xp: number;
+    /** Quantos degraus o jogador já alcançou. */
+    tier: number;
+    xpPerTier: number;
+    premium: boolean;
+    price: number;
+    tiers: { tier: number; free: { gold: number; diamonds: number }; premium: { gold: number; diamonds: number }; freeClaimed: boolean; premiumClaimed: boolean }[];
 }
 
 /** O prêmio do login diário: a sequência de 7 dias e onde o jogador está nela. */
@@ -135,7 +180,27 @@ export interface LoginView {
 }
 
 /** O que o jogador pede para resgatar. */
-export type ClaimTarget = { type: 'daily' | 'weekly'; id: string } | { type: 'chest'; at: number };
+export type ClaimTarget =
+    | { type: 'daily' | 'weekly'; id: string }
+    | { type: 'chest'; at: number }
+    | { type: 'pass'; tier: number; track: 'free' | 'premium' }
+    | { type: 'raid' };
+
+/** Como está o chefe semanal para o jogador (quem responde é o módulo de batalhas). */
+export type RaidStatus = (userId: string) => Promise<{ week: string; defeated: boolean; damage: number; reward: { gold: number; diamonds: number } }>;
+
+const passKey = (season: string, track: 'free' | 'premium', tier: number) => `passe:${season}:${track}:${tier}`;
+const premiumKey = (season: string) => `passe:${season}:premium`;
+
+/** O modo de jogo da batalha, para o ouro do evento da semana. */
+function modeOf(battle: BattleRecord): EventMode | null {
+    if (battle.opponentId) return 'pvp';
+    if (battle.towerFloor) return 'tower';
+    if (battle.campaignStage !== null) return 'campaign';
+    if (battle.challengeDay || battle.raidWeek) return null;
+
+    return 'quick';
+}
 
 const metricValue = (metrics: Metrics, metric: AchievementMetric) => (metric.kind === 'characterWins' ? (metrics.characterWins[metric.characterId] ?? 0) : metrics[metric.kind]);
 
@@ -151,14 +216,16 @@ const chestKey = (at: number) => `estrelas:${at}`;
 export class ProgressionService {
     private now: () => Date;
     private roleOf: (characterId: string) => string | undefined;
+    private raidStatus: RaidStatus | null;
 
     constructor(
         private store: ProgressionStore,
         private characterIds: () => string[],
-        options: { now?: () => Date; roleOf?: (characterId: string) => string | undefined } = {},
+        options: { now?: () => Date; roleOf?: (characterId: string) => string | undefined; raidStatus?: RaidStatus } = {},
     ) {
         this.now = options.now ?? (() => new Date());
         this.roleOf = options.roleOf ?? (() => undefined);
+        this.raidStatus = options.raidStatus ?? null;
     }
 
     async owned(userId: string): Promise<string[]> {
@@ -175,7 +242,7 @@ export class ProgressionService {
     async view(userId: string): Promise<ProgressionView> {
         await this.checkAchievements(userId);
 
-        const [wallet, owned, done, metrics, missions, stars, login] = await Promise.all([
+        const [wallet, owned, done, metrics, missions, stars, login, level, pass] = await Promise.all([
             this.store.wallet(userId),
             this.owned(userId),
             this.store.completed(userId),
@@ -183,7 +250,10 @@ export class ProgressionService {
             this.missions(userId),
             this.stars(userId),
             this.login(userId),
+            this.level(userId),
+            this.pass(userId),
         ]);
+        const event = eventOf(this.now());
         const doneAt = new Map(done.map((item) => [item.achievementId, item.completedAt]));
 
         return {
@@ -206,6 +276,59 @@ export class ProgressionService {
             missions,
             stars,
             login,
+            level,
+            event: { id: event.id, element: event.element, bonus: event.bonus, goldMode: event.goldMode, goldMultiplier: event.goldMultiplier, endsAt: event.endsAt },
+            pass,
+        };
+    }
+
+    /** Compra o passe premium da temporada atual. */
+    async buyPass(userId: string): Promise<ProgressionView> {
+        const result = await this.store.buyWithDiamonds(userId, premiumKey(seasonOf(this.now())), PASS_PRICE_DIAMONDS);
+
+        if (result === 'owned') throw new ProgressionError('ALREADY_OWNED', 409, 'progression.passOwned');
+        if (result === 'insufficient') throw new ProgressionError('INSUFFICIENT_FUNDS', 402, 'progression.insufficient.diamonds');
+
+        return this.view(userId);
+    }
+
+    private async level(userId: string): Promise<LevelView> {
+        const xp = await this.store.userXp(userId);
+        const info = levelOf(xp);
+
+        return { ...info, xp, title: titleOf(info.level) };
+    }
+
+    private async pass(userId: string): Promise<PassView> {
+        const now = this.now();
+        const season = seasonOf(now);
+        const start = new Date(Date.parse(`${season}-01T00:00:00Z`));
+        const xp = await this.store.xpSince(userId, start);
+        const keys = [premiumKey(season)];
+
+        for (let tier = 1; tier <= PASS_TIERS; tier++) keys.push(passKey(season, 'free', tier), passKey(season, 'premium', tier));
+
+        const claimed = new Set(await this.store.claimed(userId, keys));
+
+        return {
+            season,
+            endsAt: seasonEnd(now),
+            xp,
+            tier: Math.min(PASS_TIERS, Math.floor(xp / PASS_XP_PER_TIER)),
+            xpPerTier: PASS_XP_PER_TIER,
+            premium: claimed.has(premiumKey(season)),
+            price: PASS_PRICE_DIAMONDS,
+            tiers: Array.from({ length: PASS_TIERS }, (_, index) => {
+                const tier = index + 1;
+
+                return {
+                    tier,
+                    free: passReward(tier, 'free'),
+                    premium: passReward(tier, 'premium'),
+                    freeClaimed: claimed.has(passKey(season, 'free', tier)),
+                    premiumClaimed: claimed.has(passKey(season, 'premium', tier)),
+                };
+            }),
         };
     }
 
@@ -268,7 +391,23 @@ export class ProgressionService {
         let key: string;
         let reward: { gold: number; diamonds: number };
 
-        if (target.type === 'chest') {
+        if (target.type === 'pass') {
+            const pass = await this.pass(userId);
+
+            if (!Number.isInteger(target.tier) || target.tier < 1 || target.tier > PASS_TIERS) throw new ProgressionError('UNKNOWN_REWARD', 400, 'progression.unknownReward');
+            if (target.tier > pass.tier) throw new ProgressionError('NOT_COMPLETED', 409, 'progression.notCompleted');
+            if (target.track === 'premium' && !pass.premium) throw new ProgressionError('NOT_COMPLETED', 409, 'progression.passNeeded');
+
+            key = passKey(pass.season, target.track, target.tier);
+            reward = passReward(target.tier, target.track);
+        } else if (target.type === 'raid') {
+            const raid = this.raidStatus ? await this.raidStatus(userId) : null;
+
+            if (!raid || !raid.defeated || raid.damage <= 0) throw new ProgressionError('NOT_COMPLETED', 409, 'progression.notCompleted');
+
+            key = `chefe:${raid.week}`;
+            reward = raid.reward;
+        } else if (target.type === 'chest') {
             const chest = STAR_CHESTS.find((item) => item.at === target.at);
 
             if (!chest) throw new ProgressionError('UNKNOWN_REWARD', 400, 'progression.unknownReward');
@@ -322,6 +461,13 @@ export class ProgressionService {
         for (const [userId, team] of players) {
             const won = battle.winner === team;
             let gold = battleGold({ won, versus, ranked: battle.ranked, difficulty: battle.difficulty, campaign: battle.campaignStage !== null });
+            const xp = battleXp({ won, versus, ranked: battle.ranked });
+
+            // O evento da semana em que a batalha começou multiplica o ouro do modo dele.
+            const event = eventOf(battle.createdAt);
+            const mode = modeOf(battle);
+
+            if (mode && (event.goldMode === 'all' || event.goldMode === mode)) gold = Math.round(gold * event.goldMultiplier);
 
             // Andar da torre vencido: o prêmio do andar, uma vez só (os diamantes vão pelo resgate; o ouro, junto com o da batalha).
             if (won && battle.towerFloor) {
@@ -337,7 +483,19 @@ export class ProgressionService {
                 if (await this.store.claim(userId, `desafio:${battle.challengeDay}`, 0, reward.diamonds)) gold += reward.gold;
             }
 
-            if (await this.store.payBattle(battle.id, userId, gold)) {
+            const xpBefore = await this.store.userXp(userId);
+
+            if (await this.store.payBattle(battle.id, userId, gold, xp)) {
+                // Cada nível novo paga o prêmio dele (uma vez só, pela chave).
+                const from = levelOf(xpBefore).level;
+                const to = levelOf(xpBefore + xp).level;
+
+                for (let level = from + 1; level <= to; level++) {
+                    const reward = levelReward(level);
+
+                    await this.store.claim(userId, `nivel:${level}`, reward.gold, reward.diamonds);
+                }
+
                 const achieved = await this.checkAchievements(userId);
 
                 if (achieved.length) await this.store.setBattleAchievements(battle.id, userId, achieved);

@@ -91,6 +91,7 @@
         "invalidDifficulty": "Invalid difficulty: use easy, normal or hard",
         "unknownStage": "Unknown campaign stage: {{stage}}",
         "stageLocked": "This stage is still locked: beat the previous stage first",
+        "raidLimit": "You already used today's {{count}} attempts against the weekly boss. Come back tomorrow!",
         "unknownFloor": "Unknown tower floor: {{floor}}",
         "towerLocked": "This tower floor isn't open yet: beat the previous one first",
         "errorUnexpected": "Error while processing the battle",
@@ -151,6 +152,8 @@
         "unknownReward": "Unknown reward.",
         "notCompleted": "You haven't reached this reward yet.",
         "alreadyClaimed": "This reward was already claimed.",
+        "passOwned": "You already own this season's premium pass.",
+        "passNeeded": "This reward belongs to the premium pass.",
         "insufficient": {
             "gold": "Not enough gold.",
             "diamonds": "Not enough diamonds."

@@ -91,6 +91,7 @@
         "invalidDifficulty": "Nível de dificuldade inválido: use easy, normal ou hard",
         "unknownStage": "Fase da campanha desconhecida: {{stage}}",
         "stageLocked": "Essa fase ainda está bloqueada: vença a fase anterior primeiro",
+        "raidLimit": "Você já usou as {{count}} tentativas de hoje contra o chefe semanal. Volte amanhã!",
         "unknownFloor": "Andar da torre desconhecido: {{floor}}",
         "towerLocked": "Esse andar da torre ainda não está aberto: vença o anterior primeiro",
         "errorUnexpected": "Erro ao processar a batalha",
@@ -151,6 +152,8 @@
         "unknownReward": "Recompensa desconhecida.",
         "notCompleted": "Essa recompensa ainda não foi alcançada.",
         "alreadyClaimed": "Essa recompensa já foi resgatada.",
+        "passOwned": "Você já tem o passe premium desta temporada.",
+        "passNeeded": "Essa recompensa é do passe premium.",
         "insufficient": {
             "gold": "Ouro insuficiente.",
             "diamonds": "Diamantes insuficientes."

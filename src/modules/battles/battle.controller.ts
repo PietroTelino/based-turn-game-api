@@ -50,7 +50,9 @@ export class BattleController {
                 return res.status(401).json({ message: req.t('auth.notAuthenticated') });
             }
 
-            const { team, enemyTeam, training, difficulty, campaignStage, towerFloor, challenge } = req.body ?? {};
+            const { team: sent, enemyTeam, training, difficulty, campaignStage, towerFloor, challenge, chaos, raid } = req.body ?? {};
+            // Na partida caos o time é sorteado: o pedido pode vir sem time.
+            const team = chaos === true && sent === undefined ? [] : sent;
 
             if (!isStringArray(team) || (enemyTeam !== undefined && !isStringArray(enemyTeam))) {
                 throw new BattleError('INVALID_TEAM', 400, 'battle.teamRequired');
@@ -77,6 +79,8 @@ export class BattleController {
                 ...(campaignStage !== undefined && { campaignStage: campaignStage as number }),
                 ...(towerFloor !== undefined && { towerFloor: towerFloor as number }),
                 ...(challenge === true && { challenge: true }),
+                ...(chaos === true && { chaos: true }),
+                ...(raid === true && { raid: true }),
             });
 
             return res.status(201).json(result);
@@ -134,6 +138,19 @@ export class BattleController {
     };
 
     /** GET /:id/replay — a batalha encerrada do começo ao fim, para assistir de novo. */
+    /** GET /raid — o chefe semanal. */
+    raid = async (req: Request, res: Response) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({ message: req.t('auth.notAuthenticated') });
+            }
+
+            return res.json(await this.service.raid(req.user.id));
+        } catch (error) {
+            return this.handleError(req, res, error);
+        }
+    };
+
     /** GET /challenge — o desafio do dia e o placar dele. */
     challenge = async (req: Request, res: Response) => {
         try {

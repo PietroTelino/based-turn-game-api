@@ -34,12 +34,15 @@ export function createProgressionRouter(service: ProgressionService): Router {
     router.get('/', handle((req) => service.view(req.user!.id)));
     router.post('/shop', handle((req) => service.buy(req.user!.id, String(req.body?.characterId ?? ''), req.body?.currency === 'diamonds' ? 'diamonds' : 'gold')));
     router.post('/login', handle((req) => service.claimLogin(req.user!.id)));
+    router.post('/pass/premium', handle((req) => service.buyPass(req.user!.id)));
     router.post(
         '/claim',
         handle((req) => {
             const { type, id, at } = req.body ?? {};
 
             if (type === 'chest') return service.claim(req.user!.id, { type, at: Number(at) });
+            if (type === 'raid') return service.claim(req.user!.id, { type });
+            if (type === 'pass') return service.claim(req.user!.id, { type, tier: Number(req.body?.tier), track: req.body?.track === 'premium' ? 'premium' : 'free' });
             if ((type === 'daily' || type === 'weekly') && typeof id === 'string') return service.claim(req.user!.id, { type, id });
 
             throw new ProgressionError('UNKNOWN_REWARD', 400, 'progression.unknownReward');
@@ -50,7 +53,7 @@ export function createProgressionRouter(service: ProgressionService): Router {
         handle(async (req) => {
             const id = String(req.params.id);
 
-            return (/^[0-9a-f-]{36}$/i.test(id) && (await service.battleReward(id, req.user!.id))) || { gold: 0, achievements: [] };
+            return (/^[0-9a-f-]{36}$/i.test(id) && (await service.battleReward(id, req.user!.id))) || { gold: 0, xp: 0, achievements: [] };
         }),
     );
     router.post(

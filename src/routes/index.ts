@@ -58,6 +58,11 @@ battleService.onFinished((battle) => tutorialService.onBattleFinished(battle));
 // (na ranqueada a seleção é com todos os personagens, para ninguém ficar sem time).
 const progressionService = new ProgressionService(new ProgressionRepository(), () => battleService.listCharacters().map((c) => c.id), {
     roleOf: (id) => battleService.listCharacters().find((c) => c.id === id)?.role,
+    raidStatus: async (userId) => {
+        const raid = await battleService.raid(userId);
+
+        return { week: raid.week, defeated: raid.defeated, damage: raid.yourDamage, reward: raid.reward };
+    },
 });
 
 battleService.onFinished((battle) => progressionService.onBattleFinished(battle));

@@ -13,6 +13,9 @@ import {
     towerFloor,
     applyTowerModifiers,
     dailyChallenge,
+    eventOf,
+    raidOf,
+    raidBossDefinition,
     getAvailableActions,
     getFuryBonus,
     surrender,
@@ -33,6 +36,7 @@ import type {
     ReplayResponse,
     TowerView,
     ChallengeView,
+    RaidView,
 } from './battle.types';
 
 /**
@@ -100,6 +104,10 @@ export interface CreateBattleInput {
     towerFloor?: number;
     /** O desafio do dia: time inimigo, cenário, nível e modificadores são os do desafio. */
     challenge?: boolean;
+    /** Partida caos: os dois times são sorteados (o `team` pedido é ignorado). */
+    chaos?: boolean;
+    /** O chefe semanal: o time inimigo é o chefe e os lacaios dele. */
+    raid?: boolean;
 }
 
 /**
@@ -208,6 +216,32 @@ export class BattleService {
         }));
     }
 
+    /** O chefe semanal: a vida total, o dano de todos, o do jogador e as tentativas de hoje. */
+    async raid(userId: string, limit = 10): Promise<RaidView> {
+        const raid = raidOf(this.now());
+        const results = await this.store.findRaidDamage(raid.week);
+        const damage = Math.min(raid.totalHp, results.reduce((sum, row) => sum + row.damage, 0));
+        const used = await this.store.countRaidAttempts(userId, raid.week, new Date(Date.parse(`${this.today()}T00:00:00Z`)));
+
+        return {
+            week: raid.week,
+            bossId: raid.bossId,
+            characterId: raid.characterId,
+            name: raid.name,
+            minions: raid.minions,
+            totalHp: raid.totalHp,
+            damage,
+            defeated: damage >= raid.totalHp,
+            yourDamage: results.find((row) => row.userId === userId)?.damage ?? 0,
+            attemptsLeft: Math.max(0, raid.attemptsPerDay - used),
+            attemptsPerDay: raid.attemptsPerDay,
+            battleHp: raid.battleHp,
+            reward: raid.reward,
+            top: results.slice(0, limit).map((row, index) => ({ position: index + 1, ...row })),
+            endsAt: raid.endsAt,
+        };
+    }
+
     /** O desafio do dia, com a melhor vitória do jogador e o placar. */
     async challenge(userId: string, limit = 20): Promise<ChallengeView> {
         const today = this.today();
@@ -255,18 +289,23 @@ export class BattleService {
     }
 
     async create(userId: string, input: CreateBattleInput): Promise<BattleResponse> {
-        const teamA = this.resolveTeam(input.team);
+        // Na partida caos o time do jogador também é sorteado (com todos os personagens).
+        const teamA = input.chaos ? this.pickEnemyTeam(this.teamSize) : this.resolveTeam(input.team);
 
         // O treino tem o time dele, que o jogador não escolhe.
-        if (!input.training) {
+        if (!input.training && !input.chaos) {
             await this.assertOwned(userId, input.team);
         }
 
+        const raid = input.raid ? await this.openRaid(userId) : undefined;
+
         const stage = input.campaignStage !== undefined ? await this.openStage(userId, input.campaignStage) : undefined;
         const floor = input.towerFloor !== undefined && !stage ? await this.openFloor(userId, input.towerFloor) : undefined;
-        const challenge = input.challenge && !stage && !floor ? dailyChallenge(this.today(), CHARACTERS.map((character) => character.id)) : undefined;
+        const challenge = input.challenge && !stage && !floor && !raid ? dailyChallenge(this.today(), CHARACTERS.map((character) => character.id)) : undefined;
         // A fase e o andar têm o time deles. Nos testes de 1 contra 1, entram só os primeiros.
-        let teamB = stage
+        let teamB = raid
+            ? [raidBossDefinition(raid), ...raid.minions.map((id) => CHARACTERS.find((c) => c.id === id)!)].slice(0, this.teamSize)
+            : stage
             ? this.resolveTeam(stage.enemyTeam.slice(0, this.teamSize))
             : floor
               ? applyTowerModifiers(this.resolveTeam(floor.enemyTeam.slice(0, this.teamSize)), floor)
@@ -318,6 +357,19 @@ export class BattleService {
             started.state.towerModifiers = challenge.modifiers;
         }
 
+        if (raid) {
+            started.state.raidWeek = raid.week;
+        }
+
+        if (input.chaos) {
+            started.state.chaos = true;
+        }
+
+        // O evento da semana vale em toda batalha de verdade (o treino fica igual, para o roteiro do tutorial).
+        if (!input.training) {
+            this.applyEvent(started.state);
+        }
+
         // O cenário é sorteado depois do time da IA, para não mudar o time que sai de um mesmo sorteio.
         // A fase da campanha e o andar da torre têm o seu.
         started.state.arena = stage ? stage.arena : floor ? floor.arena : challenge ? challenge.arena : this.pickArena();
@@ -333,6 +385,7 @@ export class BattleService {
             ...(stage && { campaignStage: stage.stage }),
             ...(floor && { towerFloor: floor.floor }),
             ...(challenge && { challengeDay: challenge.day }),
+            ...(raid && { raidWeek: raid.week }),
         });
 
         return { battle: this.toView(record, PLAYER_TEAM), events };
@@ -354,6 +407,7 @@ export class BattleService {
 
         // Sorteado aqui, uma vez, e gravado no estado: os dois jogadores veem o mesmo cenário.
         started.state.arena = this.pickArena();
+        this.applyEvent(started.state);
 
         const record = await this.store.create(input.hostId, this.toSnapshot(started.state), {
             opponentId: input.guestId,
@@ -383,6 +437,26 @@ export class BattleService {
         }
 
         return stage;
+    }
+
+    /** Marca no estado o evento da semana e o bônus de dano do elemento dele. */
+    private applyEvent(state: BattleState): void {
+        const event = eventOf(this.now());
+
+        state.eventId = event.id;
+        state.elementBonus = { element: event.element, amount: event.bonus };
+    }
+
+    /** O chefe da semana, se o jogador ainda tem tentativa hoje. */
+    private async openRaid(userId: string) {
+        const raid = raidOf(this.now());
+        const used = await this.store.countRaidAttempts(userId, raid.week, new Date(Date.parse(`${this.today()}T00:00:00Z`)));
+
+        if (used >= raid.attemptsPerDay) {
+            throw new BattleError('RAID_LIMIT', 409, 'battle.raidLimit', { count: String(raid.attemptsPerDay) });
+        }
+
+        return raid;
     }
 
     /** O andar pedido, se é o próximo do jogador (o mais alto vencido + 1). */
@@ -549,6 +623,15 @@ export class BattleService {
             return null;
         }
 
+        // Batalha contra o chefe semanal: o dano que ele levou conta para a vida total da semana.
+        if (saved.status === 'finished' && saved.raidWeek) {
+            const boss = saved.state.units.find((unit) => unit.team === AI_TEAM && unit.boss);
+            const damage = boss ? Math.max(0, boss.stats.maxHp - Math.max(0, boss.hp)) : 0;
+
+            await this.store.setRaidDamage(saved.id, damage);
+            saved = { ...saved, raidDamage: damage };
+        }
+
         // Só uma requisição consegue gravar o fim da batalha (a trava é o
         // saveIfStep), então os ouvintes são avisados uma vez só.
         if (saved.status === 'finished' && this.finishedListeners.length > 0) {
@@ -603,6 +686,7 @@ export class BattleService {
             campaignStage: record.campaignStage,
             towerFloor: record.towerFloor,
             challengeDay: record.challengeDay,
+            raidWeek: record.raidWeek,
             spectating,
             turnTimeLeftMs: hasDeadline ? this.turnTimeLeft(record) : null,
             createdAt: record.createdAt,

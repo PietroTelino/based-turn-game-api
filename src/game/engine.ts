@@ -11,6 +11,7 @@ import {
 import { GameRuleError } from './errors';
 import { nextRandom } from './rng';
 import type {
+    SkillElement,
     AvailableAction,
     BattleAction,
     BattleEvent,
@@ -621,7 +622,7 @@ function simulateSkill(state: BattleState, actorId: string, skill: SkillDefiniti
     previewCrits = crits;
 
     try {
-        applySkillEffects(sim, self, skill.effects, targets, events);
+        applySkillEffects(sim, self, skill.effects, targets, events, skill.element);
     } finally {
         previewCrits = null;
     }
@@ -776,7 +777,7 @@ export function applyAction(current: BattleState, action: BattleAction): BattleR
     const extraOnTransform = getPassiveEffects(actor).some(({ effect }) => effect.type === 'extra_action_on_transform');
     const formBefore = actor.form;
 
-    applySkillEffects(state, actor, skill.effects, targets, events);
+    applySkillEffects(state, actor, skill.effects, targets, events, skill.element);
 
     announceStacks(actor, stacksBefore, events);
 
@@ -932,7 +933,27 @@ function receiversOf(effect: SkillEffect, actor: BattleUnit, targets: BattleUnit
 }
 
 /** Os efeitos de uma habilidade, na ordem, em quem cada um atinge. */
-function applySkillEffects(state: BattleState, actor: BattleUnit, effects: SkillEffect[], targets: BattleUnit[], events: BattleEvent[]): void {
+/** O elemento da habilidade que está sendo aplicada agora: é por ele que o bônus do evento da semana vale. */
+let castElement: SkillElement | undefined;
+
+function applySkillEffects(state: BattleState, actor: BattleUnit, effects: SkillEffect[], targets: BattleUnit[], events: BattleEvent[], element?: SkillElement): void {
+    const previousElement = castElement;
+
+    castElement = element;
+
+    try {
+        applyEffectsOf(state, actor, effects, targets, events);
+    } finally {
+        castElement = previousElement;
+    }
+}
+
+/** Quanto o evento da semana aumenta o golpe: só nas habilidades do elemento dele. */
+function eventMultiplier(state: BattleState): number {
+    return state.elementBonus && castElement === state.elementBonus.element ? 1 + state.elementBonus.amount : 1;
+}
+
+function applyEffectsOf(state: BattleState, actor: BattleUnit, effects: SkillEffect[], targets: BattleUnit[], events: BattleEvent[]): void {
     for (const effect of effects) {
         // Contado uma vez por golpe, antes dele: em área, vale igual para todos os alvos.
         const fieldBonus = getEnemyStatusBonus(state, actor);
@@ -1146,7 +1167,7 @@ function strike(
         { ...defender, def: defender.def * Math.max(0, 1 - modifiers.ignoreDefense) },
         effect.power,
         critical,
-        getFuryMultiplier(state.turn) * (1 + modifiers.damageBonus + executeBonus) * (asleep ? 1 + SLEEP_DAMAGE_BONUS : 1),
+        getFuryMultiplier(state.turn) * (1 + modifiers.damageBonus + executeBonus) * (asleep ? 1 + SLEEP_DAMAGE_BONUS : 1) * eventMultiplier(state),
     );
     const absorbed = absorbWithShield(target, amount);
     const lost = Math.min(target.hp, amount - absorbed);
@@ -1601,7 +1622,7 @@ function applyCounterAttacks(state: BattleState, attacker: BattleUnit, events: B
 
         events.push({ type: 'counter_attack', unitId: unit.id, skillId: basic.id, targetIds: [target.id] });
 
-        applySkillEffects(state, unit, basic.effects, [target], events);
+        applySkillEffects(state, unit, basic.effects, [target], events, basic.element);
 
         announceStacks(unit, stacksBefore, events);
     }

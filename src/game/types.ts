@@ -520,6 +520,13 @@ export interface BattleState {
     towerModifiers?: string[];
     /** Desafio diário: o dia ("2026-11-14"). Os modificadores dele ficam em `towerModifiers`. */
     challengeDay?: string;
+    /** O evento da semana em que a batalha foi criada (data/events.ts) e o bônus de dano do elemento dele. */
+    eventId?: string;
+    elementBonus?: { element: SkillElement; amount: number };
+    /** Batalha contra o chefe semanal: a semana ("W2026-11-09"). */
+    raidWeek?: string;
+    /** Partida caos: os dois times foram sorteados. */
+    chaos?: boolean;
     /** Estado do gerador de números aleatórios (ver rng.ts). */
     rngState: number;
 }

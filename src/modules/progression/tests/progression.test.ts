@@ -15,7 +15,17 @@ class MemoryStore implements ProgressionStore {
     diamonds = 0;
     chars = new Set<string>();
     done = new Map<string, Date>();
-    paid = new Map<string, { gold: number; achievements: string[] }>();
+    paid = new Map<string, { gold: number; xp: number; achievements: string[] }>();
+    xp = 0;
+    async userXp() { return this.xp; }
+    async xpSince() { return this.xp; }
+    async buyWithDiamonds(_u: string, key: string, price: number) {
+        if (this.claims.has(key)) return 'owned' as const;
+        if (this.diamonds < price) return 'insufficient' as const;
+        this.diamonds -= price;
+        this.claims.add(key);
+        return 'ok' as const;
+    }
     m: Metrics = { wins: 0, played: 0, winsHard: 0, campaign: 0, campaignHard: 0, pvpWins: 0, rankedWins: 0, characterWins: {} };
 
     async wallet() { return { gold: this.gold, diamonds: this.diamonds }; }
@@ -39,10 +49,11 @@ class MemoryStore implements ProgressionStore {
     }
     async addFunds(_u: string, g: number, d: number) { this.gold = Math.max(0, this.gold + g); this.diamonds = Math.max(0, this.diamonds + d); }
     async unlock(_u: string, id: string) { this.chars.add(id); }
-    async payBattle(b: string, _u: string, gold: number) {
+    async payBattle(b: string, _u: string, gold: number, xp: number) {
         if (this.paid.has(b)) return false;
-        this.paid.set(b, { gold, achievements: [] });
+        this.paid.set(b, { gold, xp, achievements: [] });
         this.gold += gold;
+        this.xp += xp;
         return true;
     }
     async setBattleAchievements(b: string, _u: string, list: string[]) { this.paid.get(b)!.achievements = list; }
@@ -74,9 +85,11 @@ class MemoryStore implements ProgressionStore {
 }
 
 const NOW = new Date('2026-11-14T15:00:00Z');
+/** Uma data na semana do evento das sombras (ouro em dobro só no PvP): os testes de ouro contra a IA não mudam. */
+const SOMBRAS = new Date('2026-11-17T12:00:00Z');
 const ROLES: Record<string, string> = { piromante: 'mage', criomante: 'mage', cavaleiro: 'tank', sacerdote: 'support', ladino: 'assassin' };
 
-const battle = (over: Partial<BattleRecord>): BattleRecord => ({ id: 'b1', userId: ANA, opponentId: null, winner: 'A', difficulty: 'normal', campaignStage: null, ranked: false, ...over } as unknown as BattleRecord);
+const battle = (over: Partial<BattleRecord>): BattleRecord => ({ id: 'b1', userId: ANA, opponentId: null, winner: 'A', difficulty: 'normal', campaignStage: null, ranked: false, createdAt: SOMBRAS, ...over } as unknown as BattleRecord);
 
 function setup() {
     const store = new MemoryStore();
@@ -99,8 +112,9 @@ describe('ProgressionService', () => {
         await service.onBattleFinished(battle({}));
         await service.onBattleFinished(battle({}));
 
-        assert.deepEqual(await service.battleReward('b1', ANA), { gold: 40, achievements: ['primeira-vitoria'] });
-        assert.equal(store.gold, 40 + 100);
+        assert.deepEqual(await service.battleReward('b1', ANA), { gold: 40, xp: 100, achievements: ['primeira-vitoria'] });
+        // 40 da vitória + 100 da conquista + 100 do nível 2 (a vitória deu 100 de experiência).
+        assert.equal(store.gold, 40 + 100 + 100);
     });
 
     it('o treino não paga nada', async () => {
@@ -229,22 +243,85 @@ describe('ProgressionService', () => {
         const { store, service } = setup();
 
         await service.onBattleFinished(battle({ id: 'c1', challengeDay: '2026-11-14', difficulty: 'hard' }));
-        // 60 da vitória no difícil + 150 do desafio, e 5 diamantes.
-        assert.deepEqual([store.gold, store.diamonds], [210, 5]);
+        // 60 da vitória no difícil + 150 do desafio + 100 do nível 2, e 5 diamantes.
+        assert.deepEqual([store.gold, store.diamonds], [310, 5]);
 
         await service.onBattleFinished(battle({ id: 'c2', challengeDay: '2026-11-14', difficulty: 'hard' }));
-        assert.equal(store.gold, 270);
+        assert.equal(store.gold, 370);
+    });
+
+    it('toda partida dá experiência; cada nível novo paga o prêmio dele', async () => {
+        const { store, service } = setup();
+
+        await service.onBattleFinished(battle({ id: 'x1' }));
+        // 100 de experiência: chega ao nível 2 (o nível 1 pede 100). 40 da vitória + 100 do nível 2.
+        assert.equal(store.xp, 100);
+        assert.equal(store.gold, 140);
+        assert.equal(store.claims.has('nivel:2'), true);
+
+        await service.onBattleFinished(battle({ id: 'x2', winner: 'B' }));
+        assert.equal(store.xp, 140, 'a derrota também dá experiência');
+
+        const { level } = await service.view(ANA);
+
+        assert.deepEqual([level.level, level.xpIntoLevel, level.xpForNext, level.title], [2, 40, 150, 'recruta']);
+    });
+
+    it('o evento da semana multiplica o ouro do modo dele', async () => {
+        const { store, service } = setup();
+
+        // Semana do fogo: ouro em dobro na campanha (40 x 1,5 da campanha = 60, em dobro = 120).
+        await service.onBattleFinished(battle({ id: 'e1', campaignStage: 1, createdAt: new Date('2026-11-12T12:00:00Z') }));
+        assert.equal(store.paid.get('e1')?.gold, 120);
+
+        // Na mesma semana, a partida rápida não muda.
+        await service.onBattleFinished(battle({ id: 'e2', createdAt: new Date('2026-11-12T12:00:00Z') }));
+        assert.equal(store.paid.get('e2')?.gold, 40);
+    });
+
+    it('o passe: degraus pela experiência do mês, trilha gratuita para todos e premium comprada com diamantes', async () => {
+        const { store, service } = setup();
+
+        store.xp = 950;
+
+        let { pass } = await service.view(ANA);
+
+        assert.deepEqual([pass.season, pass.tier, pass.premium], ['2026-11', 3, false]);
+        await service.claim(ANA, { type: 'pass', tier: 3, track: 'free' });
+        assert.equal(store.gold, 100);
+        await assert.rejects(service.claim(ANA, { type: 'pass', tier: 4, track: 'free' }), /notCompleted/);
+        await assert.rejects(service.claim(ANA, { type: 'pass', tier: 1, track: 'premium' }), /passNeeded/);
+        await assert.rejects(service.buyPass(ANA), /insufficient/);
+
+        store.diamonds = 300;
+        pass = (await service.buyPass(ANA)).pass;
+        assert.deepEqual([pass.premium, store.diamonds], [true, 50]);
+        await service.claim(ANA, { type: 'pass', tier: 3, track: 'premium' });
+        assert.deepEqual([store.gold, store.diamonds], [350, 65]);
+        await assert.rejects(service.buyPass(ANA), /passOwned/);
+    });
+
+    it('o prêmio do chefe semanal: só depois de derrotado e para quem causou dano', async () => {
+        const store = new MemoryStore();
+        let status = { week: 'W2026-11-09', defeated: false, damage: 1200, reward: { gold: 500, diamonds: 20 } };
+        const service = new ProgressionService(store, () => IDS, { now: () => NOW, raidStatus: async () => status });
+
+        await assert.rejects(service.claim(ANA, { type: 'raid' }), /notCompleted/);
+        status = { ...status, defeated: true };
+        await service.claim(ANA, { type: 'raid' });
+        assert.deepEqual([store.gold, store.diamonds], [500, 20]);
+        await assert.rejects(service.claim(ANA, { type: 'raid' }), /alreadyClaimed/);
     });
 
     it('vencer um andar da torre paga o prêmio do andar uma vez só', async () => {
         const { store, service } = setup();
 
         await service.onBattleFinished(battle({ id: 't1', towerFloor: 10, difficulty: 'normal' }));
-        // 40 da vitória no normal + 40 + 10 x 10 do andar; o andar 10 dá 10 diamantes.
-        assert.equal(store.gold, 180);
+        // 40 da vitória no normal + 40 + 10 x 10 do andar + 100 do nível 2; o andar 10 dá 10 diamantes.
+        assert.equal(store.gold, 280);
         assert.equal(store.diamonds, 10);
 
         await service.onBattleFinished(battle({ id: 't2', towerFloor: 10, difficulty: 'normal' }));
-        assert.equal(store.gold, 220, 'o andar repetido só paga a vitória');
+        assert.equal(store.gold, 320, 'o andar repetido só paga a vitória');
     });
 });

@@ -20,6 +20,8 @@ const SUMMARY_FIELDS = {
     campaignStage: true,
     towerFloor: true,
     challengeDay: true,
+    raidWeek: true,
+    raidDamage: true,
     createdAt: true,
     updatedAt: true,
     finishedAt: true,
@@ -48,6 +50,8 @@ function toSummary(row: SummaryRow): BattleSummaryRow {
         campaignStage: row.campaignStage,
         towerFloor: row.towerFloor,
         challengeDay: row.challengeDay,
+        raidWeek: row.raidWeek,
+        raidDamage: row.raidDamage,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         finishedAt: row.finishedAt,
@@ -94,6 +98,7 @@ export class BattleRepository implements BattleStore {
                 campaignStage: extra.campaignStage ?? null,
                 towerFloor: extra.towerFloor ?? null,
                 challengeDay: extra.challengeDay ?? null,
+                raidWeek: extra.raidWeek ?? null,
                 // Os personagens escolhidos entram junto com a batalha, na mesma gravação.
                 picks: { create: extra.picks.map((pick) => ({ userId: pick.userId, characterId: pick.characterId })) },
             },
@@ -144,6 +149,24 @@ export class BattleRepository implements BattleStore {
         });
 
         return row._max.towerFloor ?? 0;
+    }
+
+    async setRaidDamage(id: string, damage: number): Promise<void> {
+        await prisma.battle.update({ where: { id }, data: { raidDamage: damage } });
+    }
+
+    async findRaidDamage(week: string) {
+        const rows = await prisma.battle.groupBy({ by: ['userId'], where: { raidWeek: week, raidDamage: { gt: 0 } }, _sum: { raidDamage: true } });
+        const users = await prisma.user.findMany({ where: { id: { in: rows.map((row) => row.userId) } }, select: { id: true, name: true } });
+        const names = new Map(users.map((user) => [user.id, user.name]));
+
+        return rows
+            .map((row) => ({ userId: row.userId, name: names.get(row.userId) ?? '', damage: row._sum?.raidDamage ?? 0 }))
+            .sort((a, b) => b.damage - a.damage);
+    }
+
+    async countRaidAttempts(userId: string, week: string, since: Date): Promise<number> {
+        return prisma.battle.count({ where: { userId, raidWeek: week, createdAt: { gte: since } } });
     }
 
     async findChallengeResults(day: string) {

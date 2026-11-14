@@ -1085,3 +1085,54 @@ describe('BattleService: desafio diário', () => {
         assert.deepEqual([board.best, board.you], [7, { position: 2, turns: 7 }]);
     });
 });
+
+describe('BattleService: evento da semana, partida caos e chefe semanal', () => {
+    const now = () => new Date('2026-11-12T12:00:00Z');
+
+    it('toda batalha leva o evento da semana e o bônus do elemento dele', async () => {
+        const service = new BattleService(new InMemoryBattleStore(), () => 0, { teamSize: 1, now });
+        const { battle } = await service.create(PLAYER, { team: ['barbaro'], enemyTeam: ['cavaleiro'], seed: 1 });
+
+        // A semana de 9/11/2026 é a do fogo.
+        assert.equal(battle.state.eventId, 'fogo');
+        assert.deepEqual(battle.state.elementBonus, { element: 'fire', amount: 0.2 });
+    });
+
+    it('na partida caos os dois times são sorteados, mesmo com personagens que o jogador não tem', async () => {
+        const service = new BattleService(new InMemoryBattleStore(), () => 0.5, { teamSize: TEAM_SIZE, now });
+
+        service.setAccessCheck(async () => 'vampiro');
+
+        const { battle } = await service.create(PLAYER, { team: [], chaos: true });
+
+        assert.equal(battle.state.chaos, true);
+        assert.equal(battle.state.units.filter((unit) => unit.team === 'A').length, TEAM_SIZE);
+        assert.equal(battle.state.units.filter((unit) => unit.team === 'B').length, TEAM_SIZE);
+    });
+
+    it('o chefe semanal: dano somado de todos, 3 tentativas por dia, e a vida total da semana', async () => {
+        const store = new InMemoryBattleStore(now);
+        const service = new BattleService(store, () => 0, { teamSize: TEAM_SIZE, now });
+
+        const before = await service.raid(PLAYER);
+
+        assert.deepEqual([before.week, before.damage, before.attemptsLeft, before.defeated], ['W2026-11-09', 0, 3, false]);
+
+        const { battle } = await service.create(PLAYER, { team: FIVE, raid: true });
+        const boss = battle.state.units.find((unit) => unit.team === 'B' && unit.boss)!;
+
+        assert.equal(boss.stats.maxHp, before.battleHp);
+        assert.equal(battle.raidWeek, 'W2026-11-09');
+
+        await service.create(PLAYER, { team: FIVE, raid: true });
+        await service.create(PLAYER, { team: FIVE, raid: true });
+        await rejectsWith(service.create(PLAYER, { team: FIVE, raid: true }), 'RAID_LIMIT');
+
+        await store.setRaidDamage(battle.id, 4000);
+
+        const after = await service.raid(PLAYER);
+
+        assert.deepEqual([after.damage, after.yourDamage, after.attemptsLeft], [4000, 4000, 0]);
+        assert.deepEqual(after.top.map((row) => [row.userId, row.damage]), [[PLAYER, 4000]]);
+    });
+});

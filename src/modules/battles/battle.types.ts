@@ -43,6 +43,8 @@ export interface NewBattle {
     towerFloor?: number;
     /** Desafio diário: o dia. */
     challengeDay?: string;
+    /** Chefe semanal: a semana. */
+    raidWeek?: string;
 }
 
 /** Uma batalha como está guardada no banco. */
@@ -74,6 +76,9 @@ export interface BattleRecord extends BattleSnapshot {
     towerFloor: number | null;
     /** Desafio diário: o dia ("2026-11-14"). Vazio nas outras. */
     challengeDay: string | null;
+    /** Chefe semanal: a semana ("W2026-11-09") e o dano que o chefe levou (preenchido quando a batalha acaba). */
+    raidWeek: string | null;
+    raidDamage: number | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -107,6 +112,12 @@ export interface BattleStore {
     findTowerBest(userId: string): Promise<number>;
     /** Quem venceu o desafio do dia, com o menor número de turnos de cada um, do melhor para o pior. */
     findChallengeResults(day: string): Promise<{ userId: string; name: string; turns: number }[]>;
+    /** Grava o dano que o chefe semanal levou na batalha. */
+    setRaidDamage(id: string, damage: number): Promise<void>;
+    /** O dano de cada jogador no chefe da semana, do maior para o menor. */
+    findRaidDamage(week: string): Promise<{ userId: string; name: string; damage: number }[]>;
+    /** Quantas batalhas contra o chefe da semana o jogador começou desde `since`. */
+    countRaidAttempts(userId: string, week: string, since: Date): Promise<number>;
     /**
      * Grava só se a batalha ainda estiver em andamento e na vez esperada.
      * Devolve null quando outra requisição gravou antes. `events` passa a ser
@@ -133,6 +144,26 @@ export interface CampaignStageView {
     clearedOn: AiDifficulty[];
     /** O chefe da fase, quando ela tem: a posição no time inimigo e o nome. */
     boss: { slot: number; name: string } | null;
+}
+
+/** O chefe semanal como o jogador o vê. */
+export interface RaidView {
+    week: string;
+    bossId: string;
+    characterId: string;
+    name: string;
+    minions: string[];
+    totalHp: number;
+    /** Dano de todos os jogadores somado (no máximo a vida total). */
+    damage: number;
+    defeated: boolean;
+    yourDamage: number;
+    attemptsLeft: number;
+    attemptsPerDay: number;
+    battleHp: number;
+    reward: { gold: number; diamonds: number };
+    top: { position: number; userId: string; name: string; damage: number }[];
+    endsAt: Date;
 }
 
 /** O desafio do dia como o jogador o vê, com o placar. */
@@ -204,6 +235,7 @@ export interface BattleView {
     campaignStage: number | null;
     towerFloor: number | null;
     challengeDay: string | null;
+    raidWeek: string | null;
     /** Quem pediu só assiste (é amigo de quem joga): nada para escolher, o lado mostrado é o A. */
     spectating: boolean;
     /**

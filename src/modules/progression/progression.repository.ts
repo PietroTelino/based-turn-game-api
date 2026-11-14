@@ -6,6 +6,9 @@ import type { Currency, FinishedBattle, Metrics, ProgressionStore } from './prog
 const counted = { status: 'finished', OR: [{ difficulty: { not: null } }, { opponentId: { not: null } }] };
 const wonBy = (userId: string) => ({ OR: [{ userId, winner: 'A' }, { opponentId: userId, winner: 'B' }] });
 
+/** Sinal interno para desfazer a compra quando o saldo não dá. */
+class InsufficientDiamonds extends Error {}
+
 export class ProgressionRepository implements ProgressionStore {
     async wallet(userId: string) {
         const user = await prisma.user.findUnique({ where: { id: userId }, select: { gold: true, diamonds: true } });
@@ -96,13 +99,13 @@ export class ProgressionRepository implements ProgressionStore {
         await prisma.userCharacter.createMany({ data: [{ userId, characterId, source }], skipDuplicates: true });
     }
 
-    async payBattle(battleId: string, userId: string, gold: number) {
+    async payBattle(battleId: string, userId: string, gold: number, xp: number) {
         return prisma.$transaction(async (tx) => {
-            const created = await tx.battleReward.createMany({ data: [{ battleId, userId, gold }], skipDuplicates: true });
+            const created = await tx.battleReward.createMany({ data: [{ battleId, userId, gold, xp }], skipDuplicates: true });
 
             if (created.count === 0) return false;
 
-            await tx.user.update({ where: { id: userId }, data: { gold: { increment: gold } } });
+            await tx.user.update({ where: { id: userId }, data: { gold: { increment: gold }, xp: { increment: xp } } });
 
             return true;
         });
@@ -168,6 +171,36 @@ export class ProgressionRepository implements ProgressionStore {
         });
     }
 
+    async userXp(userId: string) {
+        return (await prisma.user.findUnique({ where: { id: userId }, select: { xp: true } }))?.xp ?? 0;
+    }
+
+    async xpSince(userId: string, since: Date) {
+        const row = await prisma.battleReward.aggregate({ where: { userId, createdAt: { gte: since } }, _sum: { xp: true } });
+
+        return row._sum?.xp ?? 0;
+    }
+
+    async buyWithDiamonds(userId: string, key: string, price: number) {
+        try {
+            return await prisma.$transaction(async (tx) => {
+                const created = await tx.userClaim.createMany({ data: [{ userId, key, diamonds: -price }], skipDuplicates: true });
+
+                if (created.count === 0) return 'owned' as const;
+
+                // Só debita se o saldo der; senão desfaz a transação inteira (a chave também).
+                const paid = await tx.user.updateMany({ where: { id: userId, diamonds: { gte: price } }, data: { diamonds: { decrement: price } } });
+
+                if (paid.count === 0) throw new InsufficientDiamonds();
+
+                return 'ok' as const;
+            });
+        } catch (error) {
+            if (error instanceof InsufficientDiamonds) return 'insufficient' as const;
+            throw error;
+        }
+    }
+
     async loginState(userId: string) {
         const user = await prisma.user.findUnique({ where: { id: userId }, select: { loginStreak: true, loginLastDay: true } });
 
@@ -186,6 +219,6 @@ export class ProgressionRepository implements ProgressionStore {
     async battleReward(battleId: string, userId: string) {
         const row = await prisma.battleReward.findUnique({ where: { battleId_userId: { battleId, userId } } });
 
-        return row ? { gold: row.gold, achievements: (row.achievements as string[]) ?? [] } : null;
+        return row ? { gold: row.gold, xp: row.xp, achievements: (row.achievements as string[]) ?? [] } : null;
     }
 }

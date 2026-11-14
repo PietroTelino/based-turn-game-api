@@ -24,6 +24,7 @@ export function createBattlesRouter(service: BattleService, guard?: RequestHandl
     battlesRouter.get('/campaign', controller.campaign);
     battlesRouter.get('/tower', controller.tower);
     battlesRouter.get('/challenge', controller.challenge);
+    battlesRouter.get('/raid', controller.raid);
     battlesRouter.post('/', ...(guard ? [guard] : []), controller.create);
     battlesRouter.get('/:id', controller.getById);
     battlesRouter.get('/:id/events', controller.events);

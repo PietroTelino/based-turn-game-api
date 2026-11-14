@@ -41,6 +41,9 @@ model User {
   loginStreak  Int     @default(0) @map("login_streak")
   loginLastDay String? @map("login_last_day")
 
+  // Nível de conta: a experiência somada de todas as partidas (o nível sai dela).
+  xp Int @default(0)
+
   // Recursos: o ouro se ganha jogando; os diamantes são o recurso pago (por enquanto, só
   // conquistas raras e o administrador dão diamantes).
   gold     Int @default(0)
@@ -165,6 +168,9 @@ model Battle {
   towerFloor    Int?    @map("tower_floor")
   // Desafio diário: o dia (UTC, "2026-11-14") do desafio. Vazio nas outras.
   challengeDay  String? @map("challenge_day")
+  // Chefe semanal: a semana ("W2026-11-09") e quanto dano o chefe levou nesta batalha.
+  raidWeek      String? @map("raid_week")
+  raidDamage    Int?    @map("raid_damage")
 
   picks BattlePick[]
 
@@ -177,6 +183,7 @@ model Battle {
   @@index([userId, campaignStage])
   @@index([userId, towerFloor])
   @@index([challengeDay])
+  @@index([raidWeek])
   @@map("battles")
 }
 
@@ -318,6 +325,8 @@ model BattleReward {
   userId       String   @map("user_id") @db.Uuid
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   gold         Int
+  // A experiência que a batalha deu (conta para o nível e para o passe da temporada).
+  xp           Int      @default(0)
   achievements Json     @default("[]")
   createdAt    DateTime @default(now()) @map("created_at")
 

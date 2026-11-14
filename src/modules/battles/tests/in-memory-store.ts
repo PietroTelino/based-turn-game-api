@@ -36,6 +36,8 @@ export class InMemoryBattleStore implements BattleStore {
             campaignStage: extra.campaignStage ?? null,
             towerFloor: extra.towerFloor ?? null,
             challengeDay: extra.challengeDay ?? null,
+            raidWeek: extra.raidWeek ?? null,
+            raidDamage: null,
             createdAt: now,
             updatedAt: now,
         };
@@ -65,6 +67,24 @@ export class InMemoryBattleStore implements BattleStore {
             .reverse()
             .slice(0, limit)
             .map(({ state: _state, events: _events, ...summary }) => summary);
+    }
+
+    async setRaidDamage(id: string, damage: number) {
+        this.patch(id, { raidDamage: damage });
+    }
+
+    async findRaidDamage(week: string) {
+        const sum = new Map<string, number>();
+
+        for (const record of this.rows.values()) {
+            if (record.raidWeek === week && record.raidDamage) sum.set(record.userId, (sum.get(record.userId) ?? 0) + record.raidDamage);
+        }
+
+        return [...sum].map(([userId, damage]) => ({ userId, name: userId, damage })).sort((a, b) => b.damage - a.damage);
+    }
+
+    async countRaidAttempts(userId: string, week: string, since: Date) {
+        return [...this.rows.values()].filter((r) => r.userId === userId && r.raidWeek === week && r.createdAt >= since).length;
     }
 
     async findChallengeResults(day: string) {

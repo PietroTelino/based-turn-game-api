@@ -11,6 +11,7 @@ export type BattleErrorCode =
     | 'STAGE_LOCKED'
     | 'UNKNOWN_FLOOR'
     | 'TOWER_LOCKED'
+    | 'RAID_LIMIT'
     | 'CHARACTER_LOCKED';
 
 /**
